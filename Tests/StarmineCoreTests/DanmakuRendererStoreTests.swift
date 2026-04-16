@@ -113,4 +113,70 @@ final class DanmakuRendererStoreTests: XCTestCase {
             accuracy: 0.001
         )
     }
+
+    func testPlaybackChromeMetricsApplyHorizontalInsetWithoutShrinkingEntryPoint() {
+        let store = DanmakuRendererStore()
+        store.load([
+            DanmakuComment(time: 0.0, text: "chrome", presentation: .scroll, color: .white),
+        ])
+
+        let viewport = CGSize(width: 844, height: 390)
+        store.sync(
+            playbackTime: 0.0,
+            viewportSize: viewport,
+            metrics: .playbackChrome
+        )
+
+        guard let item = store.activeItems.first else {
+            return XCTFail("expected active danmaku item")
+        }
+
+        let startPoint = store.point(
+            for: item,
+            playbackTime: item.startTime,
+            viewportSize: viewport,
+            metrics: .playbackChrome
+        )
+
+        XCTAssertEqual(
+            startPoint.x,
+            viewport.width - DanmakuLayoutMetrics.playbackChrome.horizontalInset + item.widthEstimate / 2,
+            accuracy: 0.001
+        )
+    }
+
+    func testCustomConfigurationChangesFontSizeAndDisplayAreaPlacement() {
+        let store = DanmakuRendererStore(
+            configuration: DanmakuRenderConfiguration(
+                fontStyle: .systemSans,
+                fontSize: 36,
+                displayArea: .half
+            )
+        )
+        store.load([
+            DanmakuComment(time: 0.0, text: "scroll", presentation: .scroll, color: .white),
+            DanmakuComment(time: 0.0, text: "bottom", presentation: .bottom, color: .white),
+        ])
+
+        let viewport = CGSize(width: 1280, height: 720)
+        store.sync(playbackTime: 0.0, viewportSize: viewport)
+
+        guard
+            let scrollItem = store.activeItems.first(where: { $0.region == .scroll }),
+            let bottomItem = store.activeItems.first(where: { $0.region == .bottom })
+        else {
+            return XCTFail("expected active scroll and bottom danmaku items")
+        }
+
+        XCTAssertEqual(scrollItem.fontSize, 36, accuracy: 0.001)
+        let bottomPoint = store.point(
+            for: bottomItem,
+            playbackTime: 0.0,
+            viewportSize: viewport
+        )
+        XCTAssertLessThan(
+            bottomPoint.y,
+            viewport.height - DanmakuLayoutMetrics.playbackChrome.bottomInset - 20
+        )
+    }
 }

@@ -311,7 +311,8 @@ struct SidebarView: View {
                 HStack(spacing: 10) {
                     Button(
                         jellyfin.accounts.isEmpty
-                            ? "连接账号" : (showJellyfinConnectForm ? "收起账号表单" : "新增账号")
+                            ? "连接账号"
+                            : (showJellyfinConnectForm ? "收起账号表单" : "新增账号")
                     ) {
                         showJellyfinConnectForm.toggle()
                     }
@@ -348,8 +349,16 @@ struct SidebarView: View {
                         text: $jellyfinServerURL
                     )
                     .textFieldStyle(.roundedBorder)
+                    #if !os(macOS)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled(true)
+                    #endif
                     TextField("用户名", text: $jellyfinUsername)
                         .textFieldStyle(.roundedBorder)
+                        #if !os(macOS)
+                            .textInputAutocapitalization(.never)
+                            .autocorrectionDisabled(true)
+                        #endif
                     SecureField("密码", text: $jellyfinPassword)
                         .textFieldStyle(.roundedBorder)
                     TextField("线路备注，可选", text: $jellyfinRouteName)
@@ -388,6 +397,10 @@ struct SidebarView: View {
                 VStack(alignment: .leading, spacing: 10) {
                     TextField("新线路地址", text: $jellyfinAdditionalRouteURL)
                         .textFieldStyle(.roundedBorder)
+                        #if !os(macOS)
+                            .textInputAutocapitalization(.never)
+                            .autocorrectionDisabled(true)
+                        #endif
                     TextField("线路备注，可选", text: $jellyfinAdditionalRouteName)
                         .textFieldStyle(.roundedBorder)
                     Button {

@@ -176,6 +176,66 @@ final class DanmakuFeatureStoreTests: XCTestCase {
         XCTAssertEqual(searchCallCount, 0)
     }
 
+    func testRenderConfigurationPersistsAcrossStoreInstances() async throws {
+        let suiteName = "DanmakuFeatureStoreTests.renderConfiguration"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defaults.removePersistentDomain(forName: suiteName)
+
+        let initialStore = DanmakuFeatureStore(
+            client: MockDandanplayClient(),
+            userDefaults: defaults
+        )
+        initialStore.renderConfiguration = DanmakuRenderConfiguration(
+            fontStyle: .systemSerif,
+            fontSize: 31,
+            displayArea: .half,
+            opacity: 0.42
+        )
+
+        let reloadedStore = DanmakuFeatureStore(
+            client: MockDandanplayClient(),
+            userDefaults: defaults
+        )
+
+        XCTAssertEqual(
+            reloadedStore.renderConfiguration,
+            DanmakuRenderConfiguration(
+                fontStyle: .systemSerif,
+                fontSize: 31,
+                displayArea: .half,
+                opacity: 0.42
+            )
+        )
+        XCTAssertEqual(
+            reloadedStore.renderer.configuration,
+            reloadedStore.renderConfiguration
+        )
+
+        defaults.removePersistentDomain(forName: suiteName)
+    }
+
+    func testRenderConfigurationDecodesLegacyPayloadWithDefaultOpacity()
+        throws
+    {
+        let data = try JSONSerialization.data(
+            withJSONObject: [
+                "fontStyle": DanmakuFontStyle.systemSans.rawValue,
+                "fontSize": 26,
+                "displayArea": DanmakuDisplayArea.full.rawValue,
+            ]
+        )
+
+        let configuration = try JSONDecoder().decode(
+            DanmakuRenderConfiguration.self,
+            from: data
+        )
+
+        XCTAssertEqual(configuration.fontStyle, .systemSans)
+        XCTAssertEqual(configuration.fontSize, 26)
+        XCTAssertEqual(configuration.displayArea, .full)
+        XCTAssertEqual(configuration.opacity, 0.66, accuracy: 0.0001)
+    }
+
     func testSearchAndAutoloadPredictsEpisodeFromExistingMapping() async throws {
         let client = MockDandanplayClient(
             searchResults: [],

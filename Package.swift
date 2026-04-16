@@ -31,6 +31,7 @@ let package = Package(
                 "Features/Danmaku/DandanplayClient.swift",
                 "Features/Danmaku/DandanplaySearchHeuristics.swift",
                 "Features/Danmaku/DanmakuFeatureStore.swift",
+                "Features/Danmaku/DanmakuMetalOverlay.swift",
                 "Features/Danmaku/DanmakuModels.swift",
                 "Features/Danmaku/DanmakuRendererStore.swift",
                 "Features/Jellyfin/JellyfinClient.swift",

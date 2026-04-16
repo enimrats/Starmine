@@ -1,5 +1,5 @@
-import Combine
 import CoreGraphics
+import CoreText
 import Foundation
 
 #if canImport(AppKit)
@@ -9,8 +9,11 @@ import Foundation
 #endif
 
 @MainActor
-final class DanmakuRendererStore: ObservableObject {
-    @Published private(set) var activeItems: [ActiveDanmaku] = []
+final class DanmakuRendererStore {
+    private(set) var activeItems: [ActiveDanmaku] = []
+
+    private(set) var configuration: DanmakuRenderConfiguration
+    private(set) var contentVersion: UInt64 = 0
 
     private var comments: [DanmakuComment] = []
     private var nextIndex = 0
@@ -18,6 +21,11 @@ final class DanmakuRendererStore: ObservableObject {
     private var scrollLanes: [Double] = []
     private var topLanes: [Double] = []
     private var bottomLanes: [Double] = []
+    private var lastLayoutSignature: DanmakuLayoutSignature?
+
+    init(configuration: DanmakuRenderConfiguration = .default) {
+        self.configuration = configuration.clamped()
+    }
 
     func load(_ comments: [DanmakuComment]) {
         self.comments = comments.sorted(by: { $0.time < $1.time })
@@ -27,32 +35,62 @@ final class DanmakuRendererStore: ObservableObject {
         scrollLanes = []
         topLanes = []
         bottomLanes = []
+        lastLayoutSignature = nil
+        bumpContentVersion()
     }
 
     func clear() {
         load([])
     }
 
+    func updateConfiguration(_ configuration: DanmakuRenderConfiguration) {
+        let clampedConfiguration = configuration.clamped()
+        guard clampedConfiguration != self.configuration else { return }
+
+        self.configuration = clampedConfiguration
+        lastLayoutSignature = nil
+        if lastPlaybackTime >= 0 {
+            reset(to: lastPlaybackTime)
+        } else if !activeItems.isEmpty {
+            activeItems = []
+        }
+        bumpContentVersion()
+    }
+
+    @discardableResult
     func sync(
         playbackTime: Double,
         viewportSize: CGSize,
         metrics: DanmakuLayoutMetrics = .playbackChrome
-    ) {
+    ) -> Bool {
         guard !comments.isEmpty, viewportSize.width > 0, viewportSize.height > 0
         else {
             if !activeItems.isEmpty {
                 activeItems = []
+                bumpContentVersion()
             }
-            return
+            return false
         }
 
+        let lanePlan = resolvedLanePlan(
+            for: viewportSize,
+            metrics: metrics
+        )
         var didChange = false
-        if shouldReset(for: playbackTime) {
+        if shouldReset(
+            for: playbackTime,
+            layoutSignature: DanmakuLayoutSignature(
+                viewportSize: viewportSize,
+                metrics: metrics,
+                lanePlan: lanePlan,
+                configuration: configuration
+            )
+        ) {
             reset(to: playbackTime)
             didChange = true
         }
 
-        configureLanes(for: viewportSize, metrics: metrics)
+        configureLanes(using: lanePlan)
         let previousCount = activeItems.count
         activeItems.removeAll(where: { $0.endTime <= playbackTime })
         didChange = didChange || activeItems.count != previousCount
@@ -63,16 +101,18 @@ final class DanmakuRendererStore: ObservableObject {
             spawn(
                 comments[nextIndex],
                 playbackTime: playbackTime,
-                viewportSize: viewportSize
+                viewportSize: viewportSize,
+                lanePlan: lanePlan
             )
             nextIndex += 1
             didChange = true
         }
 
         lastPlaybackTime = playbackTime
-        if !didChange {
-            return
+        if didChange {
+            bumpContentVersion()
         }
+        return didChange
     }
 
     func point(
@@ -112,7 +152,14 @@ final class DanmakuRendererStore: ObservableObject {
         }
     }
 
-    private func shouldReset(for playbackTime: Double) -> Bool {
+    private func shouldReset(
+        for playbackTime: Double,
+        layoutSignature: DanmakuLayoutSignature
+    ) -> Bool {
+        if lastLayoutSignature != layoutSignature {
+            lastLayoutSignature = layoutSignature
+            return true
+        }
         guard lastPlaybackTime >= 0 else { return true }
         if playbackTime < lastPlaybackTime - 0.2 {
             return true
@@ -133,38 +180,43 @@ final class DanmakuRendererStore: ObservableObject {
         bottomLanes = bottomLanes.map { _ in playbackTime }
     }
 
-    private func configureLanes(
-        for viewportSize: CGSize,
-        metrics: DanmakuLayoutMetrics
-    ) {
-        let fontSize = resolvedFontSize(for: viewportSize)
-        let laneHeight = laneHeight(for: fontSize)
-        let usableHeight = max(
-            120,
-            viewportSize.height - metrics.topInset - metrics.bottomInset
-        )
-        let scrollCount = max(5, Int((usableHeight * 0.72) / laneHeight))
-        let topCount = max(2, Int((usableHeight * 0.12) / laneHeight))
-        let bottomCount = max(2, Int((usableHeight * 0.12) / laneHeight))
-
-        if scrollLanes.count != scrollCount {
-            scrollLanes = Array(repeating: lastPlaybackTime, count: scrollCount)
+    private func configureLanes(using lanePlan: DanmakuLanePlan) {
+        if scrollLanes.count != lanePlan.scrollCount {
+            scrollLanes = Array(
+                repeating: lastPlaybackTime,
+                count: lanePlan.scrollCount
+            )
         }
-        if topLanes.count != topCount {
-            topLanes = Array(repeating: lastPlaybackTime, count: topCount)
+        if topLanes.count != lanePlan.topCount {
+            topLanes = Array(
+                repeating: lastPlaybackTime,
+                count: lanePlan.topCount
+            )
         }
-        if bottomLanes.count != bottomCount {
-            bottomLanes = Array(repeating: lastPlaybackTime, count: bottomCount)
+        if bottomLanes.count != lanePlan.bottomCount {
+            bottomLanes = Array(
+                repeating: lastPlaybackTime,
+                count: lanePlan.bottomCount
+            )
         }
     }
 
     private func spawn(
         _ comment: DanmakuComment,
         playbackTime: Double,
-        viewportSize: CGSize
+        viewportSize: CGSize,
+        lanePlan: DanmakuLanePlan
     ) {
-        let fontSize = resolvedFontSize(for: viewportSize)
-        let widthEstimate = resolvedWidth(for: comment.text, fontSize: fontSize)
+        let fontSize = lanePlan.fontSize
+        let renderWidth = resolvedRenderWidth(
+            for: comment.text,
+            fontSize: fontSize
+        )
+        let widthEstimate = resolvedCollisionWidth(
+            for: comment.text,
+            fontSize: fontSize,
+            renderWidth: renderWidth
+        )
 
         switch comment.presentation {
         case .scroll:
@@ -188,6 +240,7 @@ final class DanmakuRendererStore: ObservableObject {
                     endTime: startTime + duration,
                     duration: duration,
                     widthEstimate: widthEstimate,
+                    renderWidth: renderWidth,
                     fontSize: fontSize
                 )
             )
@@ -204,6 +257,7 @@ final class DanmakuRendererStore: ObservableObject {
                     endTime: playbackTime + duration,
                     duration: duration,
                     widthEstimate: widthEstimate,
+                    renderWidth: renderWidth,
                     fontSize: fontSize
                 )
             )
@@ -220,6 +274,7 @@ final class DanmakuRendererStore: ObservableObject {
                     endTime: playbackTime + duration,
                     duration: duration,
                     widthEstimate: widthEstimate,
+                    renderWidth: renderWidth,
                     fontSize: fontSize
                 )
             )
@@ -250,7 +305,7 @@ final class DanmakuRendererStore: ObservableObject {
                     lane: lane,
                     availableTime: laneAvailabilityTime(
                         lane: lane,
-                        candidateWidth: widthEstimate,
+                        candidateWidthEstimate: widthEstimate,
                         candidateDuration: duration,
                         playbackTime: playbackTime,
                         viewportSize: viewportSize
@@ -267,7 +322,7 @@ final class DanmakuRendererStore: ObservableObject {
 
     private func laneAvailabilityTime(
         lane: Int,
-        candidateWidth: CGFloat,
+        candidateWidthEstimate: CGFloat,
         candidateDuration: Double,
         playbackTime: Double,
         viewportSize: CGSize,
@@ -290,7 +345,7 @@ final class DanmakuRendererStore: ObservableObject {
             metrics: metrics
         )
         let candidateSpeed = scrollSpeed(
-            widthEstimate: candidateWidth,
+            widthEstimate: candidateWidthEstimate,
             duration: candidateDuration,
             viewportWidth: viewportSize.width,
             metrics: metrics
@@ -348,27 +403,60 @@ final class DanmakuRendererStore: ObservableObject {
         metrics: DanmakuLayoutMetrics
     ) -> CGFloat {
         let laneHeight = laneHeight(for: item.fontSize)
+        let displayAreaHeight = resolvedDisplayAreaHeight(
+            for: viewportSize,
+            metrics: metrics,
+            fontSize: item.fontSize
+        )
         switch item.region {
         case .scroll:
             return metrics.topInset + laneHeight * CGFloat(item.lane + 1)
         case .top:
             return metrics.topInset + laneHeight * CGFloat(item.lane + 1)
         case .bottom:
-            return viewportSize.height - metrics.bottomInset - laneHeight
+            return metrics.topInset + displayAreaHeight - laneHeight
                 * CGFloat(item.lane + 1)
         }
     }
 
     private func resolvedFontSize(for viewportSize: CGSize) -> CGFloat {
-        max(18, min(30, viewportSize.height * 0.034))
+        let _ = viewportSize
+        return configuration.resolvedFontSize
     }
 
     private func laneHeight(for fontSize: CGFloat) -> CGFloat {
-        fontSize * 1.32
+        fontSize * 1.24
     }
 
-    private func resolvedWidth(for text: String, fontSize: CGFloat) -> CGFloat {
-        max(72, measuredTextWidth(text, fontSize: fontSize) + fontSize * 1.1)
+    private func resolvedRenderWidth(for text: String, fontSize: CGFloat)
+        -> CGFloat
+    {
+        max(
+            48,
+            renderedTextWidth(
+                text,
+                fontSize: fontSize,
+                fontStyle: configuration.fontStyle
+            )
+        )
+    }
+
+    private func resolvedCollisionWidth(
+        for text: String,
+        fontSize: CGFloat,
+        renderWidth: CGFloat
+    ) -> CGFloat {
+        max(
+            renderWidth,
+            max(
+                72,
+                measuredTextWidth(
+                    text,
+                    fontSize: fontSize,
+                    fontStyle: configuration.fontStyle
+                ) + fontSize * 0.9
+            )
+        )
     }
 
     private func scrollSpeed(
@@ -393,6 +481,100 @@ final class DanmakuRendererStore: ObservableObject {
     ) -> CGFloat {
         viewportWidth - metrics.horizontalInset * 2 + widthEstimate
     }
+
+    private func resolvedLanePlan(
+        for viewportSize: CGSize,
+        metrics: DanmakuLayoutMetrics
+    ) -> DanmakuLanePlan {
+        let fontSize = resolvedFontSize(for: viewportSize)
+        let laneHeight = laneHeight(for: fontSize)
+        let displayAreaHeight = resolvedDisplayAreaHeight(
+            for: viewportSize,
+            metrics: metrics,
+            fontSize: fontSize
+        )
+        let edgeAreaHeight = max(
+            laneHeight * 2,
+            min(displayAreaHeight * 0.18, laneHeight * 3)
+        )
+        let scrollAreaHeight = max(
+            laneHeight * 3,
+            displayAreaHeight - edgeAreaHeight * 2
+        )
+
+        return DanmakuLanePlan(
+            fontSize: fontSize,
+            laneHeight: laneHeight,
+            displayAreaHeight: displayAreaHeight,
+            scrollCount: max(5, Int(scrollAreaHeight / laneHeight)),
+            topCount: max(2, Int(edgeAreaHeight / laneHeight)),
+            bottomCount: max(2, Int(edgeAreaHeight / laneHeight))
+        )
+    }
+
+    private func resolvedDisplayAreaHeight(
+        for viewportSize: CGSize,
+        metrics: DanmakuLayoutMetrics,
+        fontSize: CGFloat
+    ) -> CGFloat {
+        let usableHeight = max(
+            laneHeight(for: fontSize) * 4,
+            viewportSize.height - metrics.topInset - metrics.bottomInset
+        )
+        return min(
+            usableHeight,
+            max(
+                laneHeight(for: fontSize) * 4,
+                usableHeight * configuration.displayArea.coverageRatio
+            )
+        )
+    }
+
+    private func bumpContentVersion() {
+        contentVersion &+= 1
+    }
+}
+
+private struct DanmakuLanePlan: Equatable {
+    let fontSize: CGFloat
+    let laneHeight: CGFloat
+    let displayAreaHeight: CGFloat
+    let scrollCount: Int
+    let topCount: Int
+    let bottomCount: Int
+}
+
+private struct DanmakuLayoutSignature: Equatable {
+    let viewportWidth: Int
+    let viewportHeight: Int
+    let topInset: Int
+    let bottomInset: Int
+    let horizontalInset: Int
+    let fontStyle: DanmakuFontStyle
+    let fontSize: Int
+    let displayArea: DanmakuDisplayArea
+    let scrollCount: Int
+    let topCount: Int
+    let bottomCount: Int
+
+    init(
+        viewportSize: CGSize,
+        metrics: DanmakuLayoutMetrics,
+        lanePlan: DanmakuLanePlan,
+        configuration: DanmakuRenderConfiguration
+    ) {
+        viewportWidth = Int((viewportSize.width * 2).rounded())
+        viewportHeight = Int((viewportSize.height * 2).rounded())
+        topInset = Int((metrics.topInset * 2).rounded())
+        bottomInset = Int((metrics.bottomInset * 2).rounded())
+        horizontalInset = Int((metrics.horizontalInset * 2).rounded())
+        fontStyle = configuration.fontStyle
+        fontSize = Int((lanePlan.fontSize * 4).rounded())
+        displayArea = configuration.displayArea
+        scrollCount = lanePlan.scrollCount
+        topCount = lanePlan.topCount
+        bottomCount = lanePlan.bottomCount
+    }
 }
 
 extension Array {
@@ -413,16 +595,48 @@ extension Array {
     }
 }
 
-private func measuredTextWidth(_ text: String, fontSize: CGFloat) -> CGFloat {
+private func measuredTextWidth(
+    _ text: String,
+    fontSize: CGFloat,
+    fontStyle: DanmakuFontStyle
+) -> CGFloat {
     #if canImport(AppKit)
-        let font = NSFont.systemFont(ofSize: fontSize, weight: .heavy)
+        let font = fontStyle.platformFont(ofSize: fontSize)
         let attributes: [NSAttributedString.Key: Any] = [.font: font]
         return ceil((text as NSString).size(withAttributes: attributes).width)
     #elseif canImport(UIKit)
-        let font = UIFont.systemFont(ofSize: fontSize, weight: .heavy)
+        let font = fontStyle.platformFont(ofSize: fontSize)
         let attributes: [NSAttributedString.Key: Any] = [.font: font]
         return ceil((text as NSString).size(withAttributes: attributes).width)
     #else
         return ceil(CGFloat(text.count) * fontSize * 0.68)
     #endif
+}
+
+private func renderedTextWidth(
+    _ text: String,
+    fontSize: CGFloat,
+    fontStyle: DanmakuFontStyle
+) -> CGFloat {
+    let font = fontStyle.ctFont(ofSize: fontSize)
+    let line = CTLineCreateWithAttributedString(
+        NSAttributedString(
+            string: text,
+            attributes: [
+                kCTFontAttributeName as NSAttributedString.Key: font
+            ]
+        )
+    )
+    let bounds = CTLineGetBoundsWithOptions(
+        line,
+        [.useGlyphPathBounds, .excludeTypographicLeading]
+    )
+    if bounds.isNull || !bounds.width.isFinite || bounds.width <= 0 {
+        return measuredTextWidth(
+            text,
+            fontSize: fontSize,
+            fontStyle: fontStyle
+        )
+    }
+    return ceil(bounds.width)
 }

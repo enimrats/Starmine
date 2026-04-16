@@ -380,6 +380,10 @@ struct RootView: View {
                                 || proxy.size.width > proxy.size.height
                         )
                     }
+                    .ignoresSafeArea(
+                        .container,
+                        edges: isIOSVideoFullscreen ? .all : []
+                    )
                 } else {
                     placeholder
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -597,11 +601,10 @@ struct RootView: View {
             .background(Color.black)
             .allowsHitTesting(false)
 
-            if playbackDanmakuEnabled, videoRect.width > 0, videoRect.height > 0
+            if playbackDanmakuEnabled, surfaceSize.width > 0, surfaceSize.height > 0
             {
-                danmakuOverlay(in: videoRect.size, metrics: danmakuMetrics)
-                    .frame(width: videoRect.width, height: videoRect.height)
-                    .offset(x: videoRect.origin.x, y: videoRect.origin.y)
+                danmakuOverlay(in: surfaceSize, metrics: danmakuMetrics)
+                    .frame(width: surfaceSize.width, height: surfaceSize.height)
                     .clipped()
                     .allowsHitTesting(false)
             }
@@ -893,7 +896,8 @@ struct RootView: View {
         .padding(18)
     }
 
-    private func playbackProgressStrip(showsInlineTimeLabels: Bool) -> some View {
+    private func playbackProgressStrip(showsInlineTimeLabels: Bool) -> some View
+    {
         TimelineView(
             .animation(
                 minimumInterval: 1.0 / 120.0,
@@ -1264,68 +1268,12 @@ struct RootView: View {
         in viewport: CGSize,
         metrics: DanmakuLayoutMetrics
     ) -> some View {
-        TimelineView(
-            .animation(
-                minimumInterval: 1.0 / 120.0,
-                paused: playbackPaused || !hasActivePlayback
-            )
-        ) { context in
-            let livePosition = resolvedPlaybackPosition(at: context.date)
-
-            ZStack {
-                ForEach(
-                    danmaku.renderer.activeItems.filter {
-                        $0.startTime <= livePosition
-                    }
-                ) { item in
-                    Text(item.comment.text)
-                        .font(
-                            .system(
-                                size: item.fontSize,
-                                weight: .heavy,
-                                design: .rounded
-                            )
-                        )
-                        .foregroundStyle(item.comment.color.swiftUI)
-                        .shadow(
-                            color: .black.opacity(0.92),
-                            radius: 4,
-                            x: 0,
-                            y: 1
-                        )
-                        .lineLimit(1)
-                        .position(
-                            danmaku.renderer.point(
-                                for: item,
-                                playbackTime: livePosition,
-                                viewportSize: viewport,
-                                metrics: metrics
-                            )
-                        )
-                }
-            }
-            .onAppear {
-                danmaku.renderer.sync(
-                    playbackTime: livePosition,
-                    viewportSize: viewport,
-                    metrics: metrics
-                )
-            }
-            .onChange(of: livePosition) { newValue in
-                danmaku.renderer.sync(
-                    playbackTime: newValue,
-                    viewportSize: viewport,
-                    metrics: metrics
-                )
-            }
-            .onChange(of: viewport) { newValue in
-                danmaku.renderer.sync(
-                    playbackTime: livePosition,
-                    viewportSize: newValue,
-                    metrics: metrics
-                )
-            }
-        }
+        DanmakuMetalOverlay(
+            renderer: danmaku.renderer,
+            timebase: playback.timebase,
+            viewport: viewport,
+            metrics: metrics
+        )
     }
 
     private func fittedVideoRect(in containerSize: CGSize) -> CGRect {

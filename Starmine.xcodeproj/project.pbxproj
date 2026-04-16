@@ -47,6 +47,8 @@
 		9C6DB38BA4372385D5C6EDD6 /* AppTheme.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1D70025047903660D34EE7BE /* AppTheme.swift */; };
 		9DE391F131511C18D918EA67 /* DanmakuFeatureStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = F127A738EF0F3F59BCC3D59D /* DanmakuFeatureStore.swift */; };
 		9ED6D6FE138B4C1B86248BCA /* LaunchScreen.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = E346510891E04F1E813313F3 /* LaunchScreen.storyboard */; };
+		A2C7F4014B1F4A1B8C2D3E41 /* DanmakuMetalOverlay.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2C7F4034B1F4A1B8C2D3E41 /* DanmakuMetalOverlay.swift */; };
+		A2C7F4024B1F4A1B8C2D3E41 /* DanmakuMetalOverlay.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2C7F4034B1F4A1B8C2D3E41 /* DanmakuMetalOverlay.swift */; };
 		A1D9C6A14B1F4A1B8C2D3E41 /* DanmakuPanelView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1D9C6A34B1F4A1B8C2D3E41 /* DanmakuPanelView.swift */; };
 		A1D9C6A24B1F4A1B8C2D3E41 /* DanmakuPanelView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1D9C6A34B1F4A1B8C2D3E41 /* DanmakuPanelView.swift */; };
 		A671485476969B49FC31D026 /* DandanplayClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9D34534FC0576B46A16A8E4F /* DandanplayClient.swift */; };
@@ -88,6 +90,7 @@
 		95D84C0B74AAF8F13EBA7F14 /* JellyfinArtworkView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = JellyfinArtworkView.swift; sourceTree = "<group>"; };
 		9D1D60047F3996A8D51B6A0E /* Cocoa.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Cocoa.framework; path = Platforms/MacOSX.platform/Developer/SDKs/MacOSX15.0.sdk/System/Library/Frameworks/Cocoa.framework; sourceTree = DEVELOPER_DIR; };
 		9D34534FC0576B46A16A8E4F /* DandanplayClient.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = DandanplayClient.swift; sourceTree = "<group>"; };
+		A2C7F4034B1F4A1B8C2D3E41 /* DanmakuMetalOverlay.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = DanmakuMetalOverlay.swift; sourceTree = "<group>"; };
 		A1D9C6A34B1F4A1B8C2D3E41 /* DanmakuPanelView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = DanmakuPanelView.swift; sourceTree = "<group>"; };
 		A309581C54BFD8482AE8A2C5 /* Starmine macOS.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "Starmine macOS.app"; sourceTree = BUILT_PRODUCTS_DIR; };
 		AD792DB58F4725AC4A5680F2 /* PlaybackModels.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = PlaybackModels.swift; sourceTree = "<group>"; };
@@ -181,6 +184,7 @@
 				9D34534FC0576B46A16A8E4F /* DandanplayClient.swift */,
 				13E315B06B0A724E40044547 /* DandanplaySearchHeuristics.swift */,
 				F127A738EF0F3F59BCC3D59D /* DanmakuFeatureStore.swift */,
+				A2C7F4034B1F4A1B8C2D3E41 /* DanmakuMetalOverlay.swift */,
 				FD30F0F2012F81C5476A3CC6 /* DanmakuModels.swift */,
 				3D87A6ED0BAC30DC996A1BC9 /* DanmakuRendererStore.swift */,
 			);
@@ -369,6 +373,7 @@
 				A671485476969B49FC31D026 /* DandanplayClient.swift in Sources */,
 				02136A61A93A6D78997CE899 /* DandanplaySearchHeuristics.swift in Sources */,
 				9DE391F131511C18D918EA67 /* DanmakuFeatureStore.swift in Sources */,
+				A2C7F4014B1F4A1B8C2D3E41 /* DanmakuMetalOverlay.swift in Sources */,
 				8CCBE62B6C38324D9EF52B6C /* DanmakuModels.swift in Sources */,
 				DB82BA1D68527B0ECDABFB65 /* DanmakuRendererStore.swift in Sources */,
 				1FF4A2F45BE0F757DB89CC6B /* JellyfinArtworkView.swift in Sources */,
@@ -402,6 +407,7 @@
 				58A2A9C2F636A4945ED3DCD4 /* DandanplayClient.swift in Sources */,
 				7FBF491813529CAFE35AC9EF /* DandanplaySearchHeuristics.swift in Sources */,
 				2B899A714D3A242320A00AC0 /* DanmakuFeatureStore.swift in Sources */,
+				A2C7F4024B1F4A1B8C2D3E41 /* DanmakuMetalOverlay.swift in Sources */,
 				D757DAA10303932B3420180C /* DanmakuModels.swift in Sources */,
 				77E9759F5FAEFB0D50D8E92C /* DanmakuRendererStore.swift in Sources */,
 				B20E6AAFF6EE382994625793 /* JellyfinArtworkView.swift in Sources */,

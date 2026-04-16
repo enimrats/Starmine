@@ -128,6 +128,175 @@ struct DanmakuPanelView: View {
             }
             .cardStyle()
 
+            VStack(alignment: .leading, spacing: 14) {
+                SectionHeader(
+                    title: "渲染设置",
+                    systemImage: "slider.horizontal.3"
+                )
+
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("字体")
+                        .font(
+                            .system(
+                                size: 12,
+                                weight: .semibold,
+                                design: .rounded
+                            )
+                        )
+                        .foregroundStyle(Palette.ink.opacity(0.55))
+
+                    LazyVGrid(
+                        columns: [
+                            GridItem(.flexible(), spacing: 10),
+                            GridItem(.flexible(), spacing: 10),
+                        ],
+                        spacing: 10
+                    ) {
+                        ForEach(DanmakuFontStyle.allCases) { style in
+                            Button {
+                                danmaku.renderConfiguration.fontStyle = style
+                            } label: {
+                                HStack(spacing: 8) {
+                                    Text(style.title)
+                                        .font(
+                                            .system(
+                                                size: 14,
+                                                weight: .semibold,
+                                                design: style.swiftUIFontDesign
+                                            )
+                                        )
+                                        .lineLimit(1)
+                                    Spacer(minLength: 0)
+                                    if danmaku.renderConfiguration.fontStyle
+                                        == style
+                                    {
+                                        Image(
+                                            systemName: "checkmark.circle.fill"
+                                        )
+                                        .font(.system(size: 14, weight: .bold))
+                                    }
+                                }
+                                .foregroundStyle(
+                                    danmaku.renderConfiguration.fontStyle
+                                        == style
+                                        ? Palette.accentDeep
+                                        : Palette.ink
+                                )
+                                .padding(.horizontal, 12)
+                                .padding(.vertical, 11)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .background(
+                                    RoundedRectangle(
+                                        cornerRadius: 12,
+                                        style: .continuous
+                                    )
+                                    .fill(
+                                        danmaku.renderConfiguration.fontStyle
+                                            == style
+                                            ? Palette.selection
+                                            : Palette.surface
+                                    )
+                                )
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
+                }
+
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack {
+                        Text("字号")
+                            .font(
+                                .system(
+                                    size: 12,
+                                    weight: .semibold,
+                                    design: .rounded
+                                )
+                            )
+                            .foregroundStyle(Palette.ink.opacity(0.55))
+                        Spacer()
+                        Text("\(Int(danmaku.renderConfiguration.fontSize)) pt")
+                            .font(
+                                .system(
+                                    size: 12,
+                                    weight: .bold,
+                                    design: .rounded
+                                )
+                            )
+                            .foregroundStyle(Palette.ink.opacity(0.75))
+                    }
+
+                    Slider(
+                        value: fontSizeBinding,
+                        in: 14...52,
+                        step: 1
+                    )
+                    .tint(Palette.accentDeep)
+                }
+
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack {
+                        Text("透明度")
+                            .font(
+                                .system(
+                                    size: 12,
+                                    weight: .semibold,
+                                    design: .rounded
+                                )
+                            )
+                            .foregroundStyle(Palette.ink.opacity(0.55))
+                        Spacer()
+                        Text(
+                            "\(Int((danmaku.renderConfiguration.opacity * 100).rounded()))%"
+                        )
+                        .font(
+                            .system(
+                                size: 12,
+                                weight: .bold,
+                                design: .rounded
+                            )
+                        )
+                        .foregroundStyle(Palette.ink.opacity(0.75))
+                    }
+
+                    Slider(
+                        value: opacityBinding,
+                        in: 0...1,
+                        step: 0.01
+                    )
+                    .tint(Palette.accentDeep)
+                }
+
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("显示区域")
+                        .font(
+                            .system(
+                                size: 12,
+                                weight: .semibold,
+                                design: .rounded
+                            )
+                        )
+                        .foregroundStyle(Palette.ink.opacity(0.55))
+
+                    if prefersTouchLayout {
+                        Picker("显示区域", selection: displayAreaBinding) {
+                            ForEach(DanmakuDisplayArea.allCases) { area in
+                                Text(area.title).tag(area)
+                            }
+                        }
+                        .pickerStyle(.menu)
+                    } else {
+                        Picker("显示区域", selection: displayAreaBinding) {
+                            ForEach(DanmakuDisplayArea.allCases) { area in
+                                Text(area.title).tag(area)
+                            }
+                        }
+                        .pickerStyle(.segmented)
+                    }
+                }
+            }
+            .cardStyle()
+
             if !danmaku.searchResults.isEmpty {
                 VStack(alignment: .leading, spacing: 10) {
                     SectionHeader(
@@ -253,5 +422,29 @@ struct DanmakuPanelView: View {
             Capsule(style: .continuous)
                 .fill(Palette.surface)
         )
+    }
+
+    private var fontSizeBinding: Binding<Double> {
+        Binding {
+            danmaku.renderConfiguration.fontSize
+        } set: { newValue in
+            danmaku.renderConfiguration.fontSize = newValue
+        }
+    }
+
+    private var opacityBinding: Binding<Double> {
+        Binding {
+            danmaku.renderConfiguration.opacity
+        } set: { newValue in
+            danmaku.renderConfiguration.opacity = newValue
+        }
+    }
+
+    private var displayAreaBinding: Binding<DanmakuDisplayArea> {
+        Binding {
+            danmaku.renderConfiguration.displayArea
+        } set: { newValue in
+            danmaku.renderConfiguration.displayArea = newValue
+        }
     }
 }

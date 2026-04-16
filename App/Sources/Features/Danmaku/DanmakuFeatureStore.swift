@@ -128,6 +128,9 @@ actor DanmakuMatchMappingStore {
 
 @MainActor
 final class DanmakuFeatureStore: ObservableObject {
+    private static let renderConfigurationDefaultsKey =
+        "starmine.danmaku.renderConfiguration.v1"
+
     @Published var searchQuery = ""
     @Published var searchResults: [AnimeSearchResult] = []
     @Published var selectedAnimeID: AnimeSearchResult.ID?
@@ -135,11 +138,23 @@ final class DanmakuFeatureStore: ObservableObject {
     @Published var selectedEpisodeID: AnimeEpisode.ID?
     @Published var isSearching = false
     @Published var isLoadingDanmaku = false
+    @Published var renderConfiguration: DanmakuRenderConfiguration {
+        didSet {
+            let clampedConfiguration = renderConfiguration.clamped()
+            if clampedConfiguration != renderConfiguration {
+                renderConfiguration = clampedConfiguration
+                return
+            }
+            persistRenderConfiguration()
+            renderer.updateConfiguration(clampedConfiguration)
+        }
+    }
 
-    let renderer = DanmakuRendererStore()
+    let renderer: DanmakuRendererStore
 
     private let client: any DandanplayClientProtocol
     private let mappingStore: DanmakuMatchMappingStore
+    private let userDefaults: UserDefaults
     private(set) var inferredSeasonNumber: Int?
     private(set) var inferredSeasonEpisodeCount: Int?
     private(set) var inferredEpisodeNumber: Int?
@@ -149,10 +164,17 @@ final class DanmakuFeatureStore: ObservableObject {
 
     init(
         client: any DandanplayClientProtocol = DandanplayClient(),
-        mappingStore: DanmakuMatchMappingStore = DanmakuMatchMappingStore()
+        mappingStore: DanmakuMatchMappingStore = DanmakuMatchMappingStore(),
+        userDefaults: UserDefaults = .standard
     ) {
+        let renderConfiguration = Self.loadRenderConfiguration(
+            userDefaults: userDefaults
+        )
+        self.renderConfiguration = renderConfiguration
+        renderer = DanmakuRendererStore(configuration: renderConfiguration)
         self.client = client
         self.mappingStore = mappingStore
+        self.userDefaults = userDefaults
     }
 
     var selectedAnime: AnimeSearchResult? {
@@ -256,6 +278,31 @@ final class DanmakuFeatureStore: ObservableObject {
         selectedAnimeID = nil
         episodes = []
         selectedEpisodeID = nil
+    }
+
+    private func persistRenderConfiguration() {
+        let encoder = JSONEncoder()
+        guard let data = try? encoder.encode(renderConfiguration) else {
+            return
+        }
+        userDefaults.set(data, forKey: Self.renderConfigurationDefaultsKey)
+    }
+
+    private static func loadRenderConfiguration(userDefaults: UserDefaults)
+        -> DanmakuRenderConfiguration
+    {
+        guard
+            let data = userDefaults.data(
+                forKey: Self.renderConfigurationDefaultsKey
+            ),
+            let configuration = try? JSONDecoder().decode(
+                DanmakuRenderConfiguration.self,
+                from: data
+            )
+        else {
+            return .default
+        }
+        return configuration.clamped()
     }
 
     private func loadEpisodes(
