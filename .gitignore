@@ -1,5 +1,6 @@
 # macOS
 .DS_Store
+*/.DS_Store
 
 # Xcode user state
 *.xcuserstate
@@ -10,6 +11,7 @@
 *.mode1v3
 *.mode2v3
 *.perspectivev3
+*.xcodeproj/project.xcworkspace/
 **/xcuserdata/
 
 # Xcode and Swift build products
@@ -34,6 +36,7 @@ Build/
 # Downloaded / generated vendor binaries
 Vendor/downloads/
 Vendor/xcframeworks/
+Vendor/MPVKit-*/
 Vendor/MPVKit-0.41.0/dist/
 Vendor/MPVKit-0.41.0/release/
 

@@ -5,8 +5,9 @@ require 'xcodeproj'
 require 'pathname'
 
 ROOT = Pathname.new(__dir__).join('..').expand_path
-PROJECT_PATH = ROOT.join('StarmineApple.xcodeproj')
-PACKAGE_PATH = ROOT.join('Vendor/MPVKit-0.41.0')
+PROJECT_PATH = ROOT.join('Starmine.xcodeproj')
+MPVKIT_PACKAGE_URL = 'https://github.com/mpvkit/MPVKit.git'
+MPVKIT_VERSION = '0.41.0'
 SOURCE_ROOT = ROOT.join('App/Sources')
 RESOURCE_ROOT = ROOT.join('App/Resources')
 
@@ -23,16 +24,14 @@ project.root_object.attributes['LastUpgradeCheck'] = '1640'
 main_group = project.main_group
 sources_group = main_group.new_group('App/Sources', SOURCE_ROOT.to_s)
 resources_group = main_group.new_group('App/Resources', RESOURCE_ROOT.to_s)
-frameworks_group = main_group['Frameworks'] || main_group.new_group('Frameworks')
 
-package_ref = frameworks_group.new_file(PACKAGE_PATH.relative_path_from(ROOT).to_s)
-package_ref.last_known_file_type = 'wrapper'
-package_ref.name = 'MPVKit'
-
-local_package_ref = project.new(Xcodeproj::Project::Object::XCLocalSwiftPackageReference)
-local_package_ref.path = PACKAGE_PATH.relative_path_from(ROOT).to_s
-local_package_ref.relative_path = PACKAGE_PATH.relative_path_from(ROOT).to_s
-project.root_object.package_references << local_package_ref
+remote_package_ref = project.new(Xcodeproj::Project::Object::XCRemoteSwiftPackageReference)
+remote_package_ref.repositoryURL = MPVKIT_PACKAGE_URL
+remote_package_ref.requirement = {
+  'kind' => 'exactVersion',
+  'version' => MPVKIT_VERSION,
+}
+project.root_object.package_references << remote_package_ref
 
 ios_target = project.new_target(:application, 'Starmine iOS', :ios, '16.0')
 mac_target = project.new_target(:application, 'Starmine macOS', :osx, '13.0')
@@ -83,8 +82,8 @@ def add_package_dependency(project, target, package_reference, product_name)
   target.frameworks_build_phase.files << build_file
 end
 
-add_package_dependency(project, ios_target, local_package_ref, 'MPVKit')
-add_package_dependency(project, mac_target, local_package_ref, 'MPVKit')
+add_package_dependency(project, ios_target, remote_package_ref, 'MPVKit')
+add_package_dependency(project, mac_target, remote_package_ref, 'MPVKit')
 
 source_paths = Dir.glob(SOURCE_ROOT.join('**/*.swift')).sort
 source_paths.each do |path|
