@@ -4,6 +4,9 @@ struct PlaybackSeekBar: View {
     let duration: Double
     let position: Double
     let bufferedTint: Color
+    var trackHeight: CGFloat = 8
+    var thumbSize: CGFloat = 16
+    var interactionHeight: CGFloat = 20
     let onScrubStart: () -> Void
     let onScrubChange: (Double) -> Void
     let onScrubEnd: (Double) -> Void
@@ -14,27 +17,30 @@ struct PlaybackSeekBar: View {
             ZStack(alignment: .leading) {
                 Capsule(style: .continuous)
                     .fill(.white.opacity(0.16))
-                    .frame(height: 8)
+                    .frame(height: trackHeight)
 
                 Capsule(style: .continuous)
                     .fill(bufferedTint.opacity(0.9))
-                    .frame(width: proxy.size.width * progress, height: 8)
+                    .frame(
+                        width: proxy.size.width * progress,
+                        height: trackHeight
+                    )
 
                 Circle()
                     .fill(.white)
-                    .frame(width: 16, height: 16)
+                    .frame(width: thumbSize, height: thumbSize)
                     .shadow(color: .black.opacity(0.25), radius: 4, x: 0, y: 2)
                     .offset(
                         x: max(
                             0,
                             min(
-                                proxy.size.width - 16,
-                                proxy.size.width * progress - 8
+                                proxy.size.width - thumbSize,
+                                proxy.size.width * progress - thumbSize / 2
                             )
                         )
                     )
             }
-            .frame(height: 20)
+            .frame(height: interactionHeight)
             .contentShape(Rectangle())
             .gesture(
                 DragGesture(minimumDistance: 0)
@@ -57,7 +63,7 @@ struct PlaybackSeekBar: View {
                     }
             )
         }
-        .frame(height: 20)
+        .frame(height: interactionHeight)
     }
 
     private var normalizedProgress: CGFloat {

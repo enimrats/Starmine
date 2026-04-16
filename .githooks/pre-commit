@@ -1,0 +1,33 @@
+#!/bin/sh
+set -eu
+
+repo_root=$(git rev-parse --show-toplevel)
+cd "$repo_root"
+
+paths=$(git diff --cached --name-only --diff-filter=ACMR -- '*.xcodeproj/project.pbxproj')
+[ -n "$paths" ] || exit 0
+
+IFS='
+'
+for path in $paths; do
+  [ -n "$path" ] || continue
+
+  index_entry=$(git ls-files -s -- "$path" | awk 'NR == 1 { print $1 " " $2 }')
+  [ -n "$index_entry" ] || continue
+
+  mode=${index_entry%% *}
+  old_blob=${index_entry##* }
+  tmp=$(mktemp)
+  trap 'rm -f "$tmp"' EXIT HUP INT TERM
+
+  git cat-file -p "$old_blob" | ruby Scripts/sanitize_xcodeproj_signing.rb > "$tmp"
+  new_blob=$(git hash-object -w -- "$tmp")
+
+  if [ "$new_blob" != "$old_blob" ]; then
+    git update-index --cacheinfo "$mode" "$new_blob" "$path"
+    printf 'sanitized signing fields in %s\n' "$path"
+  fi
+
+  rm -f "$tmp"
+  trap - EXIT HUP INT TERM
+done

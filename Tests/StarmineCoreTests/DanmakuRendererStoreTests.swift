@@ -82,4 +82,35 @@ final class DanmakuRendererStoreTests: XCTestCase {
         let secondLeftEdge = secondPoint.x - reusedLaneItems[1].widthEstimate / 2
         XCTAssertGreaterThanOrEqual(secondLeftEdge, firstRightEdge - 1)
     }
+
+    func testImmersiveMetricsStartScrollDanmakuAtViewportRightEdge() {
+        let store = DanmakuRendererStore()
+        store.load([
+            DanmakuComment(time: 0.0, text: "fullscreen", presentation: .scroll, color: .white),
+        ])
+
+        let viewport = CGSize(width: 844, height: 390)
+        store.sync(
+            playbackTime: 0.0,
+            viewportSize: viewport,
+            metrics: .immersivePlayback
+        )
+
+        guard let item = store.activeItems.first else {
+            return XCTFail("expected active danmaku item")
+        }
+
+        let startPoint = store.point(
+            for: item,
+            playbackTime: item.startTime,
+            viewportSize: viewport,
+            metrics: .immersivePlayback
+        )
+
+        XCTAssertEqual(
+            startPoint.x,
+            viewport.width + item.widthEstimate / 2,
+            accuracy: 0.001
+        )
+    }
 }

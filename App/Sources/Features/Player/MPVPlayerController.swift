@@ -26,10 +26,11 @@ final class MPVPlayerController {
 
     func attachHost(_ hostID: Int64) {
         queue.async {
+            let previousHostID = self.hostID
             self.hostID = hostID
             if self.mpv == nil {
                 self.bootstrapLocked(hostID: hostID)
-            } else if let mpv = self.mpv {
+            } else if previousHostID != hostID, let mpv = self.mpv {
                 var mutableHostID = hostID
                 mpv_set_property(mpv, "wid", MPV_FORMAT_INT64, &mutableHostID)
             }

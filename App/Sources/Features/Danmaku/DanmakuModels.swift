@@ -82,4 +82,10 @@ struct DanmakuLayoutMetrics: Hashable {
         bottomInset: 118,
         horizontalInset: 18
     )
+
+    static let immersivePlayback = DanmakuLayoutMetrics(
+        topInset: 26,
+        bottomInset: 118,
+        horizontalInset: 0
+    )
 }

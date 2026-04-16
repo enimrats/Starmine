@@ -3,7 +3,7 @@
 	archiveVersion = 1;
 	classes = {
 	};
-	objectVersion = 46;
+	objectVersion = 71;
 	objects = {
 
 /* Begin PBXBuildFile section */
@@ -46,6 +46,9 @@
 		9254E247F14B439312116B87 /* JellyfinStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 95936866C8BE5747621C0277 /* JellyfinStore.swift */; };
 		9C6DB38BA4372385D5C6EDD6 /* AppTheme.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1D70025047903660D34EE7BE /* AppTheme.swift */; };
 		9DE391F131511C18D918EA67 /* DanmakuFeatureStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = F127A738EF0F3F59BCC3D59D /* DanmakuFeatureStore.swift */; };
+		9ED6D6FE138B4C1B86248BCA /* LaunchScreen.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = E346510891E04F1E813313F3 /* LaunchScreen.storyboard */; };
+		A1D9C6A14B1F4A1B8C2D3E41 /* DanmakuPanelView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1D9C6A34B1F4A1B8C2D3E41 /* DanmakuPanelView.swift */; };
+		A1D9C6A24B1F4A1B8C2D3E41 /* DanmakuPanelView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1D9C6A34B1F4A1B8C2D3E41 /* DanmakuPanelView.swift */; };
 		A671485476969B49FC31D026 /* DandanplayClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9D34534FC0576B46A16A8E4F /* DandanplayClient.swift */; };
 		B1AE1F89E25036B3884858B4 /* JellyfinModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = BB8C9559DB4DD87C49B7DDDD /* JellyfinModels.swift */; };
 		B20E6AAFF6EE382994625793 /* JellyfinArtworkView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 95D84C0B74AAF8F13EBA7F14 /* JellyfinArtworkView.swift */; };
@@ -85,6 +88,7 @@
 		95D84C0B74AAF8F13EBA7F14 /* JellyfinArtworkView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = JellyfinArtworkView.swift; sourceTree = "<group>"; };
 		9D1D60047F3996A8D51B6A0E /* Cocoa.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Cocoa.framework; path = Platforms/MacOSX.platform/Developer/SDKs/MacOSX15.0.sdk/System/Library/Frameworks/Cocoa.framework; sourceTree = DEVELOPER_DIR; };
 		9D34534FC0576B46A16A8E4F /* DandanplayClient.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = DandanplayClient.swift; sourceTree = "<group>"; };
+		A1D9C6A34B1F4A1B8C2D3E41 /* DanmakuPanelView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = DanmakuPanelView.swift; sourceTree = "<group>"; };
 		A309581C54BFD8482AE8A2C5 /* Starmine macOS.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "Starmine macOS.app"; sourceTree = BUILT_PRODUCTS_DIR; };
 		AD792DB58F4725AC4A5680F2 /* PlaybackModels.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = PlaybackModels.swift; sourceTree = "<group>"; };
 		BB8C9559DB4DD87C49B7DDDD /* JellyfinModels.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = JellyfinModels.swift; sourceTree = "<group>"; };
@@ -94,6 +98,7 @@
 		D36C9933804501B9525093BE /* SidebarView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = SidebarView.swift; sourceTree = "<group>"; };
 		D7A7CBCB63D843D505641EBF /* MPVPlayerController.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = MPVPlayerController.swift; sourceTree = "<group>"; };
 		DA224ABC442BC6DB8F4DDB9C /* Starmine iOS.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "Starmine iOS.app"; sourceTree = BUILT_PRODUCTS_DIR; };
+		E346510891E04F1E813313F3 /* LaunchScreen.storyboard */ = {isa = PBXFileReference; lastKnownFileType = file.storyboard; path = LaunchScreen.storyboard; sourceTree = "<group>"; };
 		F127A738EF0F3F59BCC3D59D /* DanmakuFeatureStore.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = DanmakuFeatureStore.swift; sourceTree = "<group>"; };
 		F66B640435195D74A506DAB8 /* LibraryWorkspaceView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = LibraryWorkspaceView.swift; sourceTree = "<group>"; };
 		FD30F0F2012F81C5476A3CC6 /* DanmakuModels.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = DanmakuModels.swift; sourceTree = "<group>"; };
@@ -133,8 +138,8 @@
 			isa = PBXGroup;
 			children = (
 				CBE4BE6EA816E6110D3972B4 /* Assets.xcassets */,
+				E346510891E04F1E813313F3 /* LaunchScreen.storyboard */,
 			);
-			name = App/Resources;
 			path = App/Resources;
 			sourceTree = "<group>";
 		};
@@ -147,7 +152,6 @@
 				95936866C8BE5747621C0277 /* JellyfinStore.swift */,
 				F66B640435195D74A506DAB8 /* LibraryWorkspaceView.swift */,
 			);
-			name = Jellyfin;
 			path = Jellyfin;
 			sourceTree = "<group>";
 		};
@@ -158,7 +162,6 @@
 				BD0F51BD42F7612A80AA749E /* Features */,
 				579C2A0433B23A935D02EE0E /* Shared */,
 			);
-			name = App/Sources;
 			path = App/Sources;
 			sourceTree = "<group>";
 		};
@@ -169,7 +172,6 @@
 				1D70025047903660D34EE7BE /* AppTheme.swift */,
 				4AFB38EACFD653615E67B140 /* String+Search.swift */,
 			);
-			name = Shared;
 			path = Shared;
 			sourceTree = "<group>";
 		};
@@ -182,7 +184,6 @@
 				FD30F0F2012F81C5476A3CC6 /* DanmakuModels.swift */,
 				3D87A6ED0BAC30DC996A1BC9 /* DanmakuRendererStore.swift */,
 			);
-			name = Danmaku;
 			path = Danmaku;
 			sourceTree = "<group>";
 		};
@@ -200,13 +201,13 @@
 			isa = PBXGroup;
 			children = (
 				81A6C86A809D9CEB3E38E994 /* AppCoordinator.swift */,
+				A1D9C6A34B1F4A1B8C2D3E41 /* DanmakuPanelView.swift */,
 				5B105502C72845B634BDE5CC /* RootView.swift */,
 				D36C9933804501B9525093BE /* SidebarView.swift */,
 				C12242215E384D8043119282 /* StarmineMacApp.swift */,
 				59C7BB660AD83B2C7435616E /* StarmineiOSApp.swift */,
 				4787504DE0E7292FE4F5A5AA /* WorkspaceSection.swift */,
 			);
-			name = App;
 			path = App;
 			sourceTree = "<group>";
 		};
@@ -217,7 +218,6 @@
 				47C6F62DE9E213928AFDD37A /* Jellyfin */,
 				E31875DC041724D142E32ECC /* Player */,
 			);
-			name = Features;
 			path = Features;
 			sourceTree = "<group>";
 		};
@@ -241,7 +241,6 @@
 				7449DC2CC53C6C0932E8089F /* PlaybackStore.swift */,
 				0BD234345515651F58BECC00 /* SystemMediaController.swift */,
 			);
-			name = Player;
 			path = Player;
 			sourceTree = "<group>";
 		};
@@ -323,11 +322,9 @@
 				Base,
 			);
 			mainGroup = 85F05179973695840015D19E;
-			minimizedProjectReferenceProxies = 0;
 			packageReferences = (
 				A53BAE94BC6D506593B4B182 /* XCRemoteSwiftPackageReference "MPVKit" */,
 			);
-			preferredProjectObjectVersion = 77;
 			productRefGroup = C0AABAA60123EC4EA6A5F50E /* Products */;
 			projectDirPath = "";
 			projectRoot = "";
@@ -352,6 +349,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				5EB31641EE6518E3AFC6146B /* Assets.xcassets in Resources */,
+				9ED6D6FE138B4C1B86248BCA /* LaunchScreen.storyboard in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -363,6 +361,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				5BD57DB5846CB0FD4D0D7AD2 /* AppCoordinator.swift in Sources */,
+				A1D9C6A14B1F4A1B8C2D3E41 /* DanmakuPanelView.swift in Sources */,
 				FDF4CB5A4A3B3CB8CEBA2CCB /* RootView.swift in Sources */,
 				921478988219408E19A63498 /* SidebarView.swift in Sources */,
 				E50C49E9A7ACE6F1BE3321CB /* StarmineiOSApp.swift in Sources */,
@@ -395,6 +394,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				C7737F81D675342C71065D1E /* AppCoordinator.swift in Sources */,
+				A1D9C6A24B1F4A1B8C2D3E41 /* DanmakuPanelView.swift in Sources */,
 				26FAAD367771C8EF3E0AF16D /* RootView.swift in Sources */,
 				3CF541D3F50F716075A17FC2 /* SidebarView.swift in Sources */,
 				1DD12F8B2640E52E3283B707 /* StarmineMacApp.swift in Sources */,
@@ -485,16 +485,21 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CLANG_ENABLE_MODULES = YES;
+				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "-";
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
 				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = "";
 				ENABLE_USER_SCRIPT_SANDBOXING = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = Starmine;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.entertainment";
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
 				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
-				LD_RUNPATH_SEARCH_PATHS = "$(inherited) @executable_path/../Frameworks";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
 				MACOSX_DEPLOYMENT_TARGET = 13.0;
 				MARKETING_VERSION = 0.1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = io.github.Starmine.apple.macos;
@@ -515,14 +520,21 @@
 				CLANG_ENABLE_OBJC_WEAK = NO;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = "";
 				ENABLE_DEBUG_DYLIB = NO;
 				ENABLE_USER_SCRIPT_SANDBOXING = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = Starmine;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.entertainment";
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				INFOPLIST_KEY_UILaunchStoryboardName = LaunchScreen;
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
 				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
-				LD_RUNPATH_SEARCH_PATHS = "$(inherited) @executable_path/Frameworks";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
 				MACOSX_DEPLOYMENT_TARGET = 13.0;
 				MARKETING_VERSION = 0.1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = io.github.Starmine.apple.ios;
@@ -540,16 +552,21 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CLANG_ENABLE_MODULES = YES;
+				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "-";
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
 				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = "";
 				ENABLE_USER_SCRIPT_SANDBOXING = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = Starmine;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.entertainment";
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
 				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
-				LD_RUNPATH_SEARCH_PATHS = "$(inherited) @executable_path/../Frameworks";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
 				MACOSX_DEPLOYMENT_TARGET = 13.0;
 				MARKETING_VERSION = 0.1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = io.github.Starmine.apple.macos;
@@ -570,13 +587,20 @@
 				CLANG_ENABLE_OBJC_WEAK = NO;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = "";
 				ENABLE_USER_SCRIPT_SANDBOXING = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = Starmine;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.entertainment";
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				INFOPLIST_KEY_UILaunchStoryboardName = LaunchScreen;
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
 				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
-				LD_RUNPATH_SEARCH_PATHS = "$(inherited) @executable_path/Frameworks";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
 				MACOSX_DEPLOYMENT_TARGET = 13.0;
 				MARKETING_VERSION = 0.1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = io.github.Starmine.apple.ios;

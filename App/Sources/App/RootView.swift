@@ -6,6 +6,12 @@ import UniformTypeIdentifiers
     import AppKit
 #endif
 
+private enum MobileRootTab: Hashable {
+    case home
+    case library
+    case player
+}
+
 struct RootView: View {
     @StateObject private var coordinator = AppCoordinator()
     @StateObject private var playbackHost = MPVVideoHostBridge()
@@ -20,6 +26,7 @@ struct RootView: View {
     @State private var workspaceSection: WorkspaceSection = .library
     @State private var jellyfinLibrarySearch = ""
     @State private var hasActivePlayback = false
+    @State private var lastObservedPlaybackURL: URL?
     @State private var currentPlaybackTitle = "Starmine"
     @State private var currentPlaybackEpisodeLabel = ""
     @State private var playbackDanmakuEnabled = true
@@ -28,6 +35,13 @@ struct RootView: View {
     @State private var playbackVideoAspect = 0.0
     @State private var selectedAudioTrackTitle: String?
     @State private var selectedSubtitleTrackTitle: String?
+    @State private var lastPlaybackSurfaceSize: CGSize = .zero
+    @State private var playbackHostRemountTask: Task<Void, Never>?
+    #if !os(macOS)
+        @State private var mobileTab: MobileRootTab = .home
+        @State private var isIOSVideoFullscreen = false
+        @State private var mobileDanmakuSheetPresented = false
+    #endif
     #if os(macOS)
         @State private var isWindowFullscreen = false
         @State private var isVideoFullscreen = false
@@ -35,8 +49,6 @@ struct RootView: View {
         @State private var videoFullscreenOwnsWindowFullscreen = false
         @State private var splitViewVisibilityBeforeVideoFullscreen:
             NavigationSplitViewVisibility?
-        @State private var lastPlaybackSurfaceSize: CGSize = .zero
-        @State private var playbackHostRemountTask: Task<Void, Never>?
     #endif
 
     private var playback: PlaybackStore { coordinator.playback }
@@ -72,24 +84,37 @@ struct RootView: View {
                     if abs(newValue - pendingSeekPosition) <= 0.75 {
                         clearPendingSeek(syncTo: newValue)
                     }
-                    return
                 }
-                scrubPosition = newValue
             }
             .onReceive(playback.$currentVideoURL.removeDuplicates()) {
                 newValue in
+                let previousValue = lastObservedPlaybackURL
+                lastObservedPlaybackURL = newValue
                 hasActivePlayback = newValue != nil
+                // Ignore repeated current-value emissions when SwiftUI rebuilds the view.
+                guard previousValue != newValue else { return }
                 clearPendingSeek(syncTo: 0)
                 if newValue == nil {
                     #if os(macOS)
                         dismissVideoFullscreenIfNeeded()
+                    #else
+                        setIOSVideoFullscreen(false)
+                        mobileDanmakuSheetPresented = false
                     #endif
                     hidePlaybackChrome()
                     if coordinator.activeJellyfinAccount != nil {
                         workspaceSection = .library
+                        #if !os(macOS)
+                            mobileTab = .library
+                        #endif
                     }
                 } else {
                     workspaceSection = .player
+                    #if !os(macOS)
+                        mobileTab = .player
+                        showPlaybackChrome()
+                        schedulePlaybackChromeAutoHide()
+                    #endif
                 }
             }
             .onReceive(playback.$currentVideoTitle.removeDuplicates()) {
@@ -138,17 +163,50 @@ struct RootView: View {
             .onChange(of: jellyfin.selectedAccountID) { newValue in
                 guard newValue != nil, !hasActivePlayback else { return }
                 workspaceSection = .library
+                #if !os(macOS)
+                    mobileTab = .library
+                #endif
             }
             .onChange(of: jellyfin.selectedLibraryID) { _ in
                 jellyfinLibrarySearch = ""
             }
+            .onChange(of: workspaceSection) { newValue in
+                #if !os(macOS)
+                    mobileTab = newValue == .library ? .library : .player
+                #endif
+            }
+            #if !os(macOS)
+                .onChange(of: mobileDanmakuSheetPresented) { presented in
+                    if presented {
+                        playbackHostRemountTask?.cancel()
+                        playbackHostRemountTask = nil
+                        cancelPlaybackChromeAutoHide()
+                    } else if hasActivePlayback {
+                        showPlaybackChrome()
+                        schedulePlaybackChromeAutoHide()
+                    }
+                }
+                .onChange(of: mobileTab) { newValue in
+                    if newValue != .player, isIOSVideoFullscreen {
+                        setIOSVideoFullscreen(false)
+                    }
+                    switch newValue {
+                    case .home:
+                        break
+                    case .library:
+                        workspaceSection = .library
+                    case .player:
+                        workspaceSection = .player
+                    }
+                }
+            #endif
             .onDisappear {
                 cancelPlaybackChromeAutoHide()
                 pendingSeekResetTask?.cancel()
                 pendingSeekResetTask = nil
+                playbackHostRemountTask?.cancel()
+                playbackHostRemountTask = nil
                 #if os(macOS)
-                    playbackHostRemountTask?.cancel()
-                    playbackHostRemountTask = nil
                     setPlaybackCursorHidden(false)
                 #endif
             }
@@ -229,9 +287,193 @@ struct RootView: View {
                 splitViewContent
             }
         #else
-            splitViewContent
+            mobileTabContent
         #endif
     }
+
+    #if !os(macOS)
+        private var mobileTabContent: some View {
+            TabView(selection: $mobileTab) {
+                NavigationStack {
+                    SidebarView(
+                        coordinator: coordinator,
+                        playback: playback,
+                        danmaku: danmaku,
+                        jellyfin: jellyfin,
+                        importerPresented: $importerPresented,
+                        workspaceSection: $workspaceSection,
+                        prefersTouchLayout: true
+                    )
+                }
+                .tabItem {
+                    Label("主页", systemImage: "square.grid.2x2.fill")
+                }
+                .tag(MobileRootTab.home)
+
+                NavigationStack {
+                    mobileLibraryScreen
+                }
+                .tabItem {
+                    Label(
+                        "媒体库",
+                        systemImage: "rectangle.stack.badge.play.fill"
+                    )
+                }
+                .tag(MobileRootTab.library)
+
+                NavigationStack {
+                    mobilePlayerScreen
+                }
+                .tabItem {
+                    Label(
+                        "播放器",
+                        systemImage: hasActivePlayback
+                            ? "play.rectangle.fill" : "play.rectangle"
+                    )
+                }
+                .tag(MobileRootTab.player)
+            }
+            .tint(Palette.accentDeep)
+        }
+
+        private var mobileLibraryScreen: some View {
+            ZStack {
+                Palette.canvas.ignoresSafeArea()
+
+                LibraryWorkspaceView(
+                    coordinator: coordinator,
+                    jellyfin: jellyfin,
+                    hasActivePlayback: hasActivePlayback,
+                    workspaceSection: $workspaceSection,
+                    jellyfinLibrarySearch: $jellyfinLibrarySearch,
+                    showsInlineSelectionToolbar: true,
+                    prefersTouchLayout: true
+                )
+                .padding(.horizontal, 16)
+                .padding(.top, 12)
+                .padding(.bottom, 20)
+            }
+            .navigationTitle("媒体库")
+            .toolbar {
+                if hasActivePlayback {
+                    ToolbarItem(placement: .navigationBarTrailing) {
+                        Button {
+                            mobileTab = .player
+                        } label: {
+                            Image(systemName: "play.rectangle.fill")
+                        }
+                    }
+                }
+            }
+        }
+
+        private var mobilePlayerScreen: some View {
+            ZStack {
+                (hasActivePlayback ? Color.black : Palette.canvas)
+                    .ignoresSafeArea()
+
+                if hasActivePlayback {
+                    GeometryReader { proxy in
+                        playbackStage(
+                            in: proxy.size,
+                            isImmersive: isIOSVideoFullscreen
+                                || proxy.size.width > proxy.size.height
+                        )
+                    }
+                } else {
+                    placeholder
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .padding(.horizontal, 24)
+                }
+            }
+            .navigationTitle("播放器")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar(
+                isIOSVideoFullscreen ? .hidden : .visible,
+                for: .navigationBar
+            )
+            .toolbar(isIOSVideoFullscreen ? .hidden : .visible, for: .tabBar)
+            .toolbarBackground(.visible, for: .navigationBar)
+            .toolbarBackground(
+                hasActivePlayback ? Color.black.opacity(0.92) : Palette.canvas,
+                for: .navigationBar
+            )
+            .toolbarColorScheme(
+                hasActivePlayback ? .dark : .light,
+                for: .navigationBar
+            )
+            .toolbar {
+                ToolbarItemGroup(placement: .navigationBarTrailing) {
+                    if hasActivePlayback {
+                        Button {
+                            showMobileDanmakuSheet()
+                        } label: {
+                            Image(systemName: "text.magnifyingglass")
+                        }
+                    }
+
+                    Button {
+                        importerPresented = true
+                    } label: {
+                        Image(systemName: "folder.badge.plus")
+                    }
+
+                    if coordinator.activeJellyfinAccount != nil {
+                        Button {
+                            mobileTab = .library
+                        } label: {
+                            Image(systemName: "rectangle.stack.badge.play.fill")
+                        }
+                    }
+                }
+            }
+            .sheet(isPresented: $mobileDanmakuSheetPresented) {
+                mobileDanmakuSheet
+            }
+        }
+
+        private var mobileDanmakuSheet: some View {
+            NavigationStack {
+                ScrollView {
+                    if hasActivePlayback {
+                        DanmakuPanelView(
+                            coordinator: coordinator,
+                            playback: playback,
+                            danmaku: danmaku,
+                            prefersTouchLayout: true
+                        )
+                        .padding(.horizontal, 16)
+                        .padding(.top, 16)
+                        .padding(.bottom, 28)
+                    } else {
+                        Text("开始播放后再替换弹幕。")
+                            .font(
+                                .system(
+                                    size: 15,
+                                    weight: .semibold,
+                                    design: .rounded
+                                )
+                            )
+                            .foregroundStyle(Palette.ink.opacity(0.6))
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(20)
+                    }
+                }
+                .background(Palette.sidebarBackground.ignoresSafeArea())
+                .navigationTitle("弹幕")
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    ToolbarItem(placement: .navigationBarTrailing) {
+                        Button("完成") {
+                            mobileDanmakuSheetPresented = false
+                        }
+                    }
+                }
+            }
+            .presentationDetents([.medium, .large])
+            .presentationDragIndicator(.visible)
+        }
+    #endif
 
     private var splitViewContent: some View {
         NavigationSplitView(columnVisibility: $splitViewVisibility) {
@@ -339,6 +581,8 @@ struct RootView: View {
             height: max(0, containerSize.height - outerPadding * 2)
         )
         let videoRect = fittedVideoRect(in: surfaceSize)
+        let danmakuMetrics: DanmakuLayoutMetrics =
+            isImmersive ? .immersivePlayback : .playbackChrome
 
         return ZStack(alignment: .topLeading) {
             RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
@@ -355,7 +599,7 @@ struct RootView: View {
 
             if playbackDanmakuEnabled, videoRect.width > 0, videoRect.height > 0
             {
-                danmakuOverlay(in: videoRect.size, metrics: .playbackChrome)
+                danmakuOverlay(in: videoRect.size, metrics: danmakuMetrics)
                     .frame(width: videoRect.width, height: videoRect.height)
                     .offset(x: videoRect.origin.x, y: videoRect.origin.y)
                     .clipped()
@@ -370,13 +614,13 @@ struct RootView: View {
         }
         .frame(width: surfaceSize.width, height: surfaceSize.height)
         .contentShape(Rectangle())
+        .onAppear {
+            handlePlaybackSurfaceSizeChange(surfaceSize)
+        }
+        .onChange(of: surfaceSize) { newValue in
+            handlePlaybackSurfaceSizeChange(newValue)
+        }
         #if os(macOS)
-            .onAppear {
-                handlePlaybackSurfaceSizeChange(surfaceSize)
-            }
-            .onChange(of: surfaceSize) { newValue in
-                handlePlaybackSurfaceSizeChange(newValue)
-            }
             .onContinuousHover { phase in
                 updatePlaybackChrome(for: phase)
             }
@@ -559,27 +803,30 @@ struct RootView: View {
                 .foregroundStyle(.white)
                 .lineLimit(2)
 
-            HStack(spacing: 8) {
-                if let selectedAnime = coordinator.selectedAnime {
-                    PillLabel(text: selectedAnime.title)
-                }
-                if !currentPlaybackEpisodeLabel.isEmpty {
-                    PillLabel(text: currentPlaybackEpisodeLabel)
-                }
-                if playbackIsRemote,
-                    let route = coordinator.activeJellyfinRoute?.name
-                {
-                    PillLabel(text: route)
-                }
-                if let selectedAudioTrackTitle {
-                    PillLabel(text: selectedAudioTrackTitle)
-                }
-                if let selectedSubtitleTrackTitle {
-                    PillLabel(text: selectedSubtitleTrackTitle)
-                }
-                if danmaku.isLoadingDanmaku {
-                    ProgressView()
-                        .tint(.white)
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 8) {
+                    if let selectedAnime = coordinator.selectedAnime {
+                        PillLabel(text: selectedAnime.title)
+                    }
+                    if !currentPlaybackEpisodeLabel.isEmpty {
+                        PillLabel(text: currentPlaybackEpisodeLabel)
+                    }
+                    if playbackIsRemote,
+                        let route = coordinator.activeJellyfinRoute?.name
+                    {
+                        PillLabel(text: route)
+                    }
+                    if let selectedAudioTrackTitle {
+                        PillLabel(text: selectedAudioTrackTitle)
+                    }
+                    if let selectedSubtitleTrackTitle {
+                        PillLabel(text: selectedSubtitleTrackTitle)
+                    }
+                    if danmaku.isLoadingDanmaku {
+                        ProgressView()
+                            .tint(.white)
+                            .padding(.horizontal, 4)
+                    }
                 }
             }
         }
@@ -626,6 +873,27 @@ struct RootView: View {
     }
 
     private func controls(width: CGFloat) -> some View {
+        let usesCompactLayout = showsCompactPlaybackControls(for: width)
+
+        return VStack(spacing: usesCompactLayout ? 12 : 14) {
+            playbackProgressStrip(showsInlineTimeLabels: usesCompactLayout)
+
+            if usesCompactLayout {
+                compactPlaybackControls()
+            } else {
+                regularPlaybackControls(width: width)
+            }
+        }
+        .padding(.horizontal, usesCompactLayout ? 16 : 18)
+        .padding(.vertical, usesCompactLayout ? 14 : 16)
+        .background(
+            RoundedRectangle(cornerRadius: 24, style: .continuous)
+                .fill(.black.opacity(0.74))
+        )
+        .padding(18)
+    }
+
+    private func playbackProgressStrip(showsInlineTimeLabels: Bool) -> some View {
         TimelineView(
             .animation(
                 minimumInterval: 1.0 / 120.0,
@@ -634,7 +902,7 @@ struct RootView: View {
         ) { context in
             let livePosition = resolvedPlaybackPosition(at: context.date)
 
-            VStack(spacing: 14) {
+            VStack(spacing: showsInlineTimeLabels ? 10 : 0) {
                 PlaybackSeekBar(
                     duration: playback.snapshot.duration,
                     position: livePosition,
@@ -652,118 +920,334 @@ struct RootView: View {
                     }
                 )
 
-                HStack(spacing: 14) {
+                if showsInlineTimeLabels {
+                    compactPlaybackTimeLabels
+                }
+            }
+        }
+    }
+
+    private var compactPlaybackTimeLabels: some View {
+        TimelineView(
+            .animation(
+                minimumInterval: 1.0 / 120.0,
+                paused: playbackPaused || !hasActivePlayback
+            )
+        ) { context in
+            let livePosition = resolvedPlaybackPosition(at: context.date)
+
+            HStack {
+                playbackTimeText(livePosition)
+                Spacer(minLength: 12)
+                playbackDurationText
+            }
+        }
+    }
+
+    private func regularPlaybackTimeLabels(width: CGFloat) -> some View {
+        TimelineView(
+            .animation(
+                minimumInterval: 1.0 / 120.0,
+                paused: playbackPaused || !hasActivePlayback
+            )
+        ) { context in
+            let livePosition = resolvedPlaybackPosition(at: context.date)
+
+            HStack(spacing: 0) {
+                playbackTimeText(livePosition)
+
+                Capsule()
+                    .fill(.white.opacity(0.18))
+                    .frame(width: max(24, width * 0.05), height: 4)
+                    .padding(.horizontal, 14)
+
+                playbackDurationText
+            }
+        }
+    }
+
+    private func regularPlaybackControls(width: CGFloat) -> some View {
+        HStack(spacing: 14) {
+            chromeButton(
+                systemName: "backward.end.fill",
+                disabled: !playback.canPlayPreviousEpisode
+            ) {
+                notePlaybackInteraction()
+                coordinator.playPreviousEpisode()
+            }
+            chromeButton(
+                systemName: playback.snapshot.paused
+                    ? "play.fill" : "pause.fill"
+            ) {
+                notePlaybackInteraction()
+                coordinator.togglePause()
+            }
+            chromeButton(
+                systemName: "forward.end.fill",
+                disabled: !playback.canPlayNextEpisode
+            ) {
+                notePlaybackInteraction()
+                coordinator.playNextEpisode()
+            }
+            chromeButton(systemName: "gobackward.10") {
+                beginOptimisticSeek(to: displayedPlaybackPosition - 10)
+            }
+            chromeButton(systemName: "goforward.10") {
+                beginOptimisticSeek(to: displayedPlaybackPosition + 10)
+            }
+
+            regularPlaybackTimeLabels(width: width)
+
+            Spacer(minLength: 12)
+
+            trackMenu(
+                title: playback.selectedAudioTrack?.title ?? "音轨",
+                systemImage: "music.note",
+                tracks: playback.audioTracks,
+                selectedID: playback.selectedAudioTrackID,
+                includeOffOption: false
+            ) { id in
+                if let id {
+                    notePlaybackInteraction()
+                    coordinator.selectAudioTrack(id: id)
+                }
+            }
+
+            trackMenu(
+                title: playback.selectedSubtitleTrack?.title ?? "字幕关闭",
+                systemImage: "captions.bubble",
+                tracks: playback.subtitleTracks,
+                selectedID: playback.selectedSubtitleTrackID,
+                includeOffOption: true
+            ) { id in
+                notePlaybackInteraction()
+                coordinator.selectSubtitleTrack(id: id)
+            }
+
+            chromeButton(
+                systemName: playbackDanmakuEnabled
+                    ? "text.bubble.fill" : "text.bubble"
+            ) {
+                notePlaybackInteraction()
+                playback.danmakuEnabled.toggle()
+            }
+
+            #if !os(macOS)
+                chromeButton(systemName: "text.magnifyingglass") {
+                    showMobileDanmakuSheet()
+                }
+
+                chromeButton(
+                    systemName: isIOSVideoFullscreen
+                        ? "arrow.down.right.and.arrow.up.left"
+                        : "arrow.up.left.and.arrow.down.right"
+                ) {
+                    notePlaybackInteraction()
+                    toggleIOSVideoFullscreen()
+                }
+            #endif
+
+            #if os(macOS)
+                chromeButton(
+                    systemName: isVideoFullscreen
+                        ? "arrow.down.right.and.arrow.up.left"
+                        : "arrow.up.left.and.arrow.down.right"
+                ) {
+                    toggleVideoFullscreen()
+                }
+            #endif
+
+            chromeButton(systemName: "folder") {
+                notePlaybackInteraction()
+                importerPresented = true
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func compactPlaybackControls() -> some View {
+        #if !os(macOS)
+            VStack(spacing: 12) {
+                HStack(spacing: 6) {
                     chromeButton(
                         systemName: "backward.end.fill",
-                        disabled: !playback.canPlayPreviousEpisode
+                        disabled: !playback.canPlayPreviousEpisode,
+                        size: 32
                     ) {
                         notePlaybackInteraction()
                         coordinator.playPreviousEpisode()
                     }
+                    chromeButton(systemName: "gobackward.10", size: 32) {
+                        beginOptimisticSeek(to: displayedPlaybackPosition - 10)
+                    }
                     chromeButton(
                         systemName: playback.snapshot.paused
-                            ? "play.fill" : "pause.fill"
+                            ? "play.fill" : "pause.fill",
+                        size: 44,
+                        emphasized: true
                     ) {
                         notePlaybackInteraction()
                         coordinator.togglePause()
                     }
+                    chromeButton(systemName: "goforward.10", size: 32) {
+                        beginOptimisticSeek(to: displayedPlaybackPosition + 10)
+                    }
                     chromeButton(
                         systemName: "forward.end.fill",
-                        disabled: !playback.canPlayNextEpisode
+                        disabled: !playback.canPlayNextEpisode,
+                        size: 32
                     ) {
                         notePlaybackInteraction()
                         coordinator.playNextEpisode()
                     }
-                    chromeButton(systemName: "gobackward.10") {
-                        beginOptimisticSeek(to: livePosition - 10)
+                    chromeButton(systemName: "text.magnifyingglass", size: 32) {
+                        showMobileDanmakuSheet()
                     }
-                    chromeButton(systemName: "goforward.10") {
-                        beginOptimisticSeek(to: livePosition + 10)
-                    }
-
-                    Text(timeString(livePosition))
-                        .font(
-                            .system(
-                                size: 13,
-                                weight: .semibold,
-                                design: .rounded
-                            )
-                        )
-                        .foregroundStyle(.white.opacity(0.88))
-
-                    Capsule()
-                        .fill(.white.opacity(0.18))
-                        .frame(width: max(24, width * 0.05), height: 4)
-
-                    Text(timeString(playback.snapshot.duration))
-                        .font(
-                            .system(
-                                size: 13,
-                                weight: .semibold,
-                                design: .rounded
-                            )
-                        )
-                        .foregroundStyle(.white.opacity(0.62))
-
-                    Spacer(minLength: 12)
-
-                    trackMenu(
-                        title: playback.selectedAudioTrack?.title ?? "音轨",
-                        systemImage: "music.note",
-                        tracks: playback.audioTracks,
-                        selectedID: playback.selectedAudioTrackID,
-                        includeOffOption: false
-                    ) { id in
-                        if let id {
-                            notePlaybackInteraction()
-                            coordinator.selectAudioTrack(id: id)
-                        }
-                    }
-
-                    trackMenu(
-                        title: playback.selectedSubtitleTrack?.title ?? "字幕关闭",
-                        systemImage: "captions.bubble",
-                        tracks: playback.subtitleTracks,
-                        selectedID: playback.selectedSubtitleTrackID,
-                        includeOffOption: true
-                    ) { id in
-                        notePlaybackInteraction()
-                        coordinator.selectSubtitleTrack(id: id)
-                    }
-
                     chromeButton(
-                        systemName: playbackDanmakuEnabled
-                            ? "text.bubble.fill" : "text.bubble"
+                        systemName: isIOSVideoFullscreen
+                            ? "arrow.down.right.and.arrow.up.left"
+                            : "arrow.up.left.and.arrow.down.right",
+                        size: 32
                     ) {
                         notePlaybackInteraction()
-                        playback.danmakuEnabled.toggle()
+                        toggleIOSVideoFullscreen()
                     }
-
-                    #if os(macOS)
-                        chromeButton(
-                            systemName: isVideoFullscreen
-                                ? "arrow.down.right.and.arrow.up.left"
-                                : "arrow.up.left.and.arrow.down.right"
-                        ) {
-                            toggleVideoFullscreen()
-                        }
-                    #endif
-
-                    chromeButton(systemName: "folder") {
-                        notePlaybackInteraction()
-                        importerPresented = true
-                    }
+                    compactPlaybackActionsMenu
                 }
             }
-            .padding(.horizontal, 18)
-            .padding(.vertical, 16)
-            .background(
-                RoundedRectangle(cornerRadius: 24, style: .continuous)
-                    .fill(.black.opacity(0.74))
-            )
-            .padding(18)
-        }
+        #else
+            EmptyView()
+        #endif
     }
+
+    @ViewBuilder
+    private var compactPlaybackActionsMenu: some View {
+        #if !os(macOS)
+            Menu {
+                Section("弹幕") {
+                    Button {
+                        showMobileDanmakuSheet()
+                    } label: {
+                        Label("搜索或替换弹幕", systemImage: "text.magnifyingglass")
+                    }
+
+                    Button {
+                        notePlaybackInteraction()
+                        playback.danmakuEnabled.toggle()
+                    } label: {
+                        Label(
+                            playbackDanmakuEnabled ? "关闭弹幕" : "显示弹幕",
+                            systemImage: playbackDanmakuEnabled
+                                ? "text.bubble.fill" : "text.bubble"
+                        )
+                    }
+                }
+
+                Section("音轨与字幕") {
+                    Menu {
+                        ForEach(playback.audioTracks) { track in
+                            trackMenuButton(
+                                title: track.title,
+                                detail: track.detail,
+                                isSelected: playback.selectedAudioTrackID
+                                    == track.mpvID
+                            ) {
+                                notePlaybackInteraction()
+                                coordinator.selectAudioTrack(id: track.mpvID)
+                            }
+                        }
+                    } label: {
+                        Label("音轨", systemImage: "music.note")
+                    }
+                    .disabled(playback.audioTracks.isEmpty)
+
+                    Menu {
+                        trackMenuButton(
+                            title: "关闭字幕",
+                            detail: "",
+                            isSelected: playback.selectedSubtitleTrackID == nil
+                        ) {
+                            notePlaybackInteraction()
+                            coordinator.selectSubtitleTrack(id: nil)
+                        }
+
+                        ForEach(playback.subtitleTracks) { track in
+                            trackMenuButton(
+                                title: track.title,
+                                detail: track.detail,
+                                isSelected: playback.selectedSubtitleTrackID
+                                    == track.mpvID
+                            ) {
+                                notePlaybackInteraction()
+                                coordinator.selectSubtitleTrack(id: track.mpvID)
+                            }
+                        }
+                    } label: {
+                        Label("字幕", systemImage: "captions.bubble")
+                    }
+                }
+
+                Section("更多") {
+                    Button {
+                        notePlaybackInteraction()
+                        importerPresented = true
+                    } label: {
+                        Label("打开视频", systemImage: "folder.badge.plus")
+                    }
+
+                    if coordinator.activeJellyfinAccount != nil {
+                        Button {
+                            notePlaybackInteraction()
+                            mobileTab = .library
+                        } label: {
+                            Label(
+                                "前往媒体库",
+                                systemImage: "rectangle.stack.badge.play.fill"
+                            )
+                        }
+                    }
+
+                    Button {
+                        notePlaybackInteraction()
+                        toggleIOSVideoFullscreen()
+                    } label: {
+                        Label(
+                            isIOSVideoFullscreen ? "退出全屏" : "进入全屏",
+                            systemImage: isIOSVideoFullscreen
+                                ? "arrow.down.right.and.arrow.up.left"
+                                : "arrow.up.left.and.arrow.down.right"
+                        )
+                    }
+                }
+            } label: {
+                Image(systemName: "ellipsis.circle")
+                    .font(.system(size: 16, weight: .bold))
+                    .frame(width: 32, height: 32)
+                    .background(
+                        Circle()
+                            .fill(.white.opacity(0.14))
+                    )
+            }
+            .foregroundStyle(.white)
+        #else
+            EmptyView()
+        #endif
+    }
+
+    private func showsCompactPlaybackControls(for width: CGFloat) -> Bool {
+        #if os(macOS)
+            false
+        #else
+            width < 680
+        #endif
+    }
+
+    #if !os(macOS)
+        private func showMobileDanmakuSheet() {
+            notePlaybackInteraction()
+            mobileDanmakuSheetPresented = true
+        }
+    #endif
 
     private func chromeRect(
         in surfaceSize: CGSize,
@@ -936,21 +1420,51 @@ struct RootView: View {
     private func chromeButton(
         systemName: String,
         disabled: Bool = false,
+        size: CGFloat = 34,
+        emphasized: Bool = false,
         action: @escaping () -> Void
     ) -> some View {
         Button(action: action) {
             Image(systemName: systemName)
-                .font(.system(size: 14, weight: .bold))
-                .frame(width: 34, height: 34)
+                .font(.system(size: size * 0.42, weight: .bold))
+                .frame(width: size, height: size)
                 .background(
                     Circle()
-                        .fill(.white.opacity(disabled ? 0.08 : 0.14))
+                        .fill(
+                            emphasized
+                                ? Palette.accent.opacity(disabled ? 0.18 : 0.92)
+                                : .white.opacity(disabled ? 0.08 : 0.14)
+                        )
                 )
         }
         .buttonStyle(.plain)
         .foregroundStyle(.white)
         .opacity(disabled ? 0.45 : 1)
         .disabled(disabled)
+    }
+
+    private func playbackTimeText(_ seconds: Double) -> some View {
+        Text(timeString(seconds))
+            .font(
+                .system(
+                    size: 13,
+                    weight: .semibold,
+                    design: .rounded
+                )
+            )
+            .foregroundStyle(.white.opacity(0.88))
+    }
+
+    private var playbackDurationText: some View {
+        Text(timeString(playback.snapshot.duration))
+            .font(
+                .system(
+                    size: 13,
+                    weight: .semibold,
+                    design: .rounded
+                )
+            )
+            .foregroundStyle(.white.opacity(0.62))
     }
 
     private func timeString(_ seconds: Double) -> String {
@@ -1071,6 +1585,56 @@ struct RootView: View {
         return min(playback.snapshot.duration, lowerBound)
     }
 
+    private func handlePlaybackSurfaceSizeChange(_ size: CGSize) {
+        guard hasActivePlayback else { return }
+        guard size.width > 1, size.height > 1 else { return }
+
+        let previousSize = lastPlaybackSurfaceSize
+        let widthChanged =
+            abs(size.width - previousSize.width) > 0.5
+        let heightChanged =
+            abs(size.height - previousSize.height) > 0.5
+        guard widthChanged || heightChanged else { return }
+        lastPlaybackSurfaceSize = size
+
+        #if os(macOS)
+            guard !pendingVideoFullscreenEntry else { return }
+            playbackHostRemountTask?.cancel()
+            playbackHostRemountTask = Task { @MainActor in
+                try? await Task.sleep(nanoseconds: 120_000_000)
+                guard !Task.isCancelled else { return }
+                playbackHost.remountHost()
+                playbackHostRemountTask = nil
+            }
+        #else
+            let widthDelta = abs(size.width - previousSize.width)
+            let heightDelta = abs(size.height - previousSize.height)
+            let previousLandscape = previousSize.width > previousSize.height
+            let currentLandscape = size.width > size.height
+            let orientationClassChanged =
+                previousSize != .zero && previousLandscape != currentLandscape
+            let needsHostRemount =
+                !mobileDanmakuSheetPresented
+                && (orientationClassChanged || widthDelta > 48
+                    || heightDelta > 48)
+
+            if needsHostRemount {
+                playbackHostRemountTask?.cancel()
+                playbackHostRemountTask = Task { @MainActor in
+                    try? await Task.sleep(nanoseconds: 150_000_000)
+                    guard !Task.isCancelled else { return }
+                    playbackHost.remountHost()
+                    showPlaybackChrome()
+                    schedulePlaybackChromeAutoHide()
+                    playbackHostRemountTask = nil
+                }
+            } else {
+                showPlaybackChrome()
+                schedulePlaybackChromeAutoHide()
+            }
+        #endif
+    }
+
     #if os(macOS)
         private func updatePlaybackChrome(for phase: HoverPhase) {
             switch phase {
@@ -1138,28 +1702,6 @@ struct RootView: View {
             window.toggleFullScreen(nil)
         }
 
-        private func handlePlaybackSurfaceSizeChange(_ size: CGSize) {
-            guard hasActivePlayback else { return }
-            guard size.width > 1, size.height > 1 else { return }
-
-            let widthChanged =
-                abs(size.width - lastPlaybackSurfaceSize.width) > 0.5
-            let heightChanged =
-                abs(size.height - lastPlaybackSurfaceSize.height) > 0.5
-            guard widthChanged || heightChanged else { return }
-            lastPlaybackSurfaceSize = size
-
-            guard !pendingVideoFullscreenEntry else { return }
-
-            playbackHostRemountTask?.cancel()
-            playbackHostRemountTask = Task { @MainActor in
-                try? await Task.sleep(nanoseconds: 120_000_000)
-                guard !Task.isCancelled else { return }
-                playbackHost.remountHost()
-                playbackHostRemountTask = nil
-            }
-        }
-
         private func schedulePlaybackChromeAutoHide() {
             playbackChromeAutoHideTask?.cancel()
             playbackChromeAutoHideTask = Task { @MainActor in
@@ -1178,6 +1720,24 @@ struct RootView: View {
             NSCursor.setHiddenUntilMouseMoves(hidden)
         }
     #else
+        private func toggleIOSVideoFullscreen() {
+            setIOSVideoFullscreen(!isIOSVideoFullscreen)
+        }
+
+        private func setIOSVideoFullscreen(_ isFullscreen: Bool) {
+            guard isIOSVideoFullscreen != isFullscreen else { return }
+            isIOSVideoFullscreen = isFullscreen
+
+            if isFullscreen {
+                StarmineiOSOrientationController.enterVideoFullscreen()
+            } else {
+                StarmineiOSOrientationController.exitVideoFullscreen()
+            }
+
+            showPlaybackChrome()
+            schedulePlaybackChromeAutoHide()
+        }
+
         private func handlePlaybackSurfaceTap() {
             showPlaybackChrome()
             schedulePlaybackChromeAutoHide()
