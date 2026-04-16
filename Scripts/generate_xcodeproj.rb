@@ -68,6 +68,9 @@ mac_bundle_identifier = 'io.github.Starmine.apple.macos'
     config.build_settings['SUPPORTED_PLATFORMS'] = target == ios_target ? 'iphonesimulator iphoneos' : 'macosx'
     config.build_settings['PRODUCT_BUNDLE_IDENTIFIER'] = target == ios_target ? ios_bundle_identifier : mac_bundle_identifier
     config.build_settings['TARGETED_DEVICE_FAMILY'] = target == ios_target ? '1,2' : nil
+    if target == ios_target && config.name == 'Debug'
+      config.build_settings['ENABLE_DEBUG_DYLIB'] = 'NO'
+    end
   end
 end
 
@@ -111,4 +114,91 @@ ios_target.resources_build_phase.add_file_reference(asset_catalog_ref)
 mac_target.resources_build_phase.add_file_reference(asset_catalog_ref)
 
 project.save
+
+scheme_dir = PROJECT_PATH.join('xcshareddata', 'xcschemes')
+scheme_dir.mkpath
+
+ios_scheme = <<~XML
+  <?xml version="1.0" encoding="UTF-8"?>
+  <Scheme
+     LastUpgradeVersion = "1640"
+     version = "1.7">
+     <BuildAction
+        parallelizeBuildables = "YES"
+        buildImplicitDependencies = "YES">
+        <BuildActionEntries>
+           <BuildActionEntry
+              buildForTesting = "YES"
+              buildForRunning = "YES"
+              buildForProfiling = "YES"
+              buildForArchiving = "YES"
+              buildForAnalyzing = "YES">
+              <BuildableReference
+                 BuildableIdentifier = "primary"
+                 BlueprintIdentifier = "#{ios_target.uuid}"
+                 BuildableName = "Starmine iOS.app"
+                 BlueprintName = "Starmine iOS"
+                 ReferencedContainer = "container:Starmine.xcodeproj">
+              </BuildableReference>
+           </BuildActionEntry>
+        </BuildActionEntries>
+     </BuildAction>
+     <TestAction
+        buildConfiguration = "Debug"
+        selectedDebuggerIdentifier = "Xcode.DebuggerFoundation.Debugger.LLDB"
+        selectedLauncherIdentifier = "Xcode.DebuggerFoundation.Launcher.LLDB"
+        shouldUseLaunchSchemeArgsEnv = "YES">
+        <Testables>
+        </Testables>
+     </TestAction>
+     <LaunchAction
+        buildConfiguration = "Debug"
+        selectedDebuggerIdentifier = ""
+        selectedLauncherIdentifier = "Xcode.IDEFoundation.Launcher.PosixSpawn"
+        launchStyle = "0"
+        useCustomWorkingDirectory = "NO"
+        ignoresPersistentStateOnLaunch = "NO"
+        debugDocumentVersioning = "YES"
+        debugServiceExtension = "internal"
+        allowLocationSimulation = "YES"
+        debugExecutable = "NO">
+        <BuildableProductRunnable
+           runnableDebuggingMode = "0">
+           <BuildableReference
+              BuildableIdentifier = "primary"
+              BlueprintIdentifier = "#{ios_target.uuid}"
+              BuildableName = "Starmine iOS.app"
+              BlueprintName = "Starmine iOS"
+              ReferencedContainer = "container:Starmine.xcodeproj">
+           </BuildableReference>
+        </BuildableProductRunnable>
+     </LaunchAction>
+     <ProfileAction
+        buildConfiguration = "Release"
+        shouldUseLaunchSchemeArgsEnv = "YES"
+        savedToolIdentifier = ""
+        useCustomWorkingDirectory = "NO"
+        debugDocumentVersioning = "YES">
+        <BuildableProductRunnable
+           runnableDebuggingMode = "0">
+           <BuildableReference
+              BuildableIdentifier = "primary"
+              BlueprintIdentifier = "#{ios_target.uuid}"
+              BuildableName = "Starmine iOS.app"
+              BlueprintName = "Starmine iOS"
+              ReferencedContainer = "container:Starmine.xcodeproj">
+           </BuildableReference>
+        </BuildableProductRunnable>
+     </ProfileAction>
+     <AnalyzeAction
+        buildConfiguration = "Debug">
+     </AnalyzeAction>
+     <ArchiveAction
+        buildConfiguration = "Release"
+        revealArchiveInOrganizer = "YES">
+     </ArchiveAction>
+  </Scheme>
+XML
+
+File.write(scheme_dir.join('Starmine iOS.xcscheme'), ios_scheme)
 puts "Created #{PROJECT_PATH}"
