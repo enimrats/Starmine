@@ -33,6 +33,8 @@
 		5EB31641EE6518E3AFC6146B /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = CBE4BE6EA816E6110D3972B4 /* Assets.xcassets */; };
 		5F90C711622DDE86D3ED548A /* WorkspaceSection.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4787504DE0E7292FE4F5A5AA /* WorkspaceSection.swift */; };
 		6329C52E6147764F79AA18F8 /* JellyfinClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 898A5C434B5417225FC546F8 /* JellyfinClient.swift */; };
+		63D191FD2F913414007B42DF /* FilesWorkspaceView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 63D191FC2F913414007B42DF /* FilesWorkspaceView.swift */; };
+		63D191FE2F913414007B42DF /* FilesWorkspaceView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 63D191FC2F913414007B42DF /* FilesWorkspaceView.swift */; };
 		6B00F5D14F5105E6FBB39DE2 /* MPVKit in Frameworks */ = {isa = PBXBuildFile; productRef = 05AB851A3810C2948D57DF76 /* MPVKit */; };
 		74860861CC3DC116D1977251 /* PlaybackStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7449DC2CC53C6C0932E8089F /* PlaybackStore.swift */; };
 		77C31F4C1B93771D2EC028A8 /* PlaybackModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = AD792DB58F4725AC4A5680F2 /* PlaybackModels.swift */; };
@@ -47,10 +49,10 @@
 		9C6DB38BA4372385D5C6EDD6 /* AppTheme.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1D70025047903660D34EE7BE /* AppTheme.swift */; };
 		9DE391F131511C18D918EA67 /* DanmakuFeatureStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = F127A738EF0F3F59BCC3D59D /* DanmakuFeatureStore.swift */; };
 		9ED6D6FE138B4C1B86248BCA /* LaunchScreen.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = E346510891E04F1E813313F3 /* LaunchScreen.storyboard */; };
-		A2C7F4014B1F4A1B8C2D3E41 /* DanmakuMetalOverlay.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2C7F4034B1F4A1B8C2D3E41 /* DanmakuMetalOverlay.swift */; };
-		A2C7F4024B1F4A1B8C2D3E41 /* DanmakuMetalOverlay.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2C7F4034B1F4A1B8C2D3E41 /* DanmakuMetalOverlay.swift */; };
 		A1D9C6A14B1F4A1B8C2D3E41 /* DanmakuPanelView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1D9C6A34B1F4A1B8C2D3E41 /* DanmakuPanelView.swift */; };
 		A1D9C6A24B1F4A1B8C2D3E41 /* DanmakuPanelView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1D9C6A34B1F4A1B8C2D3E41 /* DanmakuPanelView.swift */; };
+		A2C7F4014B1F4A1B8C2D3E41 /* DanmakuMetalOverlay.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2C7F4034B1F4A1B8C2D3E41 /* DanmakuMetalOverlay.swift */; };
+		A2C7F4024B1F4A1B8C2D3E41 /* DanmakuMetalOverlay.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2C7F4034B1F4A1B8C2D3E41 /* DanmakuMetalOverlay.swift */; };
 		A671485476969B49FC31D026 /* DandanplayClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9D34534FC0576B46A16A8E4F /* DandanplayClient.swift */; };
 		B1AE1F89E25036B3884858B4 /* JellyfinModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = BB8C9559DB4DD87C49B7DDDD /* JellyfinModels.swift */; };
 		B20E6AAFF6EE382994625793 /* JellyfinArtworkView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 95D84C0B74AAF8F13EBA7F14 /* JellyfinArtworkView.swift */; };
@@ -82,6 +84,7 @@
 		4AFB38EACFD653615E67B140 /* String+Search.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = "String+Search.swift"; sourceTree = "<group>"; };
 		59C7BB660AD83B2C7435616E /* StarmineiOSApp.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = StarmineiOSApp.swift; sourceTree = "<group>"; };
 		5B105502C72845B634BDE5CC /* RootView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = RootView.swift; sourceTree = "<group>"; };
+		63D191FC2F913414007B42DF /* FilesWorkspaceView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FilesWorkspaceView.swift; sourceTree = "<group>"; };
 		7449DC2CC53C6C0932E8089F /* PlaybackStore.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = PlaybackStore.swift; sourceTree = "<group>"; };
 		81A6C86A809D9CEB3E38E994 /* AppCoordinator.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = AppCoordinator.swift; sourceTree = "<group>"; };
 		871693A175CC1E25270C0F67 /* AppErrorState.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = AppErrorState.swift; sourceTree = "<group>"; };
@@ -90,8 +93,8 @@
 		95D84C0B74AAF8F13EBA7F14 /* JellyfinArtworkView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = JellyfinArtworkView.swift; sourceTree = "<group>"; };
 		9D1D60047F3996A8D51B6A0E /* Cocoa.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Cocoa.framework; path = Platforms/MacOSX.platform/Developer/SDKs/MacOSX15.0.sdk/System/Library/Frameworks/Cocoa.framework; sourceTree = DEVELOPER_DIR; };
 		9D34534FC0576B46A16A8E4F /* DandanplayClient.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = DandanplayClient.swift; sourceTree = "<group>"; };
-		A2C7F4034B1F4A1B8C2D3E41 /* DanmakuMetalOverlay.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = DanmakuMetalOverlay.swift; sourceTree = "<group>"; };
 		A1D9C6A34B1F4A1B8C2D3E41 /* DanmakuPanelView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = DanmakuPanelView.swift; sourceTree = "<group>"; };
+		A2C7F4034B1F4A1B8C2D3E41 /* DanmakuMetalOverlay.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = DanmakuMetalOverlay.swift; sourceTree = "<group>"; };
 		A309581C54BFD8482AE8A2C5 /* Starmine macOS.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "Starmine macOS.app"; sourceTree = BUILT_PRODUCTS_DIR; };
 		AD792DB58F4725AC4A5680F2 /* PlaybackModels.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = PlaybackModels.swift; sourceTree = "<group>"; };
 		BB8C9559DB4DD87C49B7DDDD /* JellyfinModels.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = JellyfinModels.swift; sourceTree = "<group>"; };
@@ -208,6 +211,7 @@
 				A1D9C6A34B1F4A1B8C2D3E41 /* DanmakuPanelView.swift */,
 				5B105502C72845B634BDE5CC /* RootView.swift */,
 				D36C9933804501B9525093BE /* SidebarView.swift */,
+				63D191FC2F913414007B42DF /* FilesWorkspaceView.swift */,
 				C12242215E384D8043119282 /* StarmineMacApp.swift */,
 				59C7BB660AD83B2C7435616E /* StarmineiOSApp.swift */,
 				4787504DE0E7292FE4F5A5AA /* WorkspaceSection.swift */,
@@ -384,6 +388,7 @@
 				E40A4F2308C112122E45C513 /* MPVPlayerController.swift in Sources */,
 				521C2012E0B09E73749B8CA5 /* MPVVideoHost.swift in Sources */,
 				77C31F4C1B93771D2EC028A8 /* PlaybackModels.swift in Sources */,
+				63D191FD2F913414007B42DF /* FilesWorkspaceView.swift in Sources */,
 				2FC84F914C3951FA77EE74D1 /* PlaybackPlatformSupport.swift in Sources */,
 				52DC94B646E31A515532B129 /* PlaybackSeekBar.swift in Sources */,
 				74860861CC3DC116D1977251 /* PlaybackStore.swift in Sources */,
@@ -418,6 +423,7 @@
 				7E6701DF9FEFB2872B6D69E0 /* MPVPlayerController.swift in Sources */,
 				127D6FE813004B8F1DA0999C /* MPVVideoHost.swift in Sources */,
 				8452D4F96510F1A2E09B2669 /* PlaybackModels.swift in Sources */,
+				63D191FE2F913414007B42DF /* FilesWorkspaceView.swift in Sources */,
 				34F95C8C9B2A9631A4598F6F /* PlaybackPlatformSupport.swift in Sources */,
 				D8455520A3B0E28C064582D7 /* PlaybackSeekBar.swift in Sources */,
 				185C6BEE6660BBC65605F965 /* PlaybackStore.swift in Sources */,

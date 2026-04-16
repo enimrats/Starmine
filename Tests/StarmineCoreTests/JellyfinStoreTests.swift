@@ -217,4 +217,75 @@ final class JellyfinStoreTests: XCTestCase {
         let rememberedLibraryID = await client.rememberedLibraryID()
         XCTAssertEqual(rememberedLibraryID, "tv")
     }
+
+    func testRemoveAccountRefreshesReplacementActiveAccount() async throws {
+        let removedAccountID = UUID()
+        let remainingAccountID = UUID()
+        let removedAccount = JellyfinAccountProfile(
+            id: removedAccountID,
+            serverID: "server-1",
+            serverName: "Jellyfin A",
+            username: "alice",
+            userID: "user-1",
+            accessToken: "token-1",
+            routes: [JellyfinRoute(name: "default", url: "http://example.com")]
+        )
+        let remainingAccount = JellyfinAccountProfile(
+            id: remainingAccountID,
+            serverID: "server-2",
+            serverName: "Jellyfin B",
+            username: "bob",
+            userID: "user-2",
+            accessToken: "token-2",
+            routes: [JellyfinRoute(name: "default", url: "http://example.org")]
+        )
+        let client = MockJellyfinClient(
+            snapshotValue: JellyfinStoreSnapshot(
+                accounts: [remainingAccount],
+                activeAccountID: remainingAccountID
+            ),
+            librariesByAccountID: [
+                remainingAccountID: [
+                    JellyfinLibrary(
+                        payload: [
+                            "Id": "movies",
+                            "Name": "Movies",
+                            "CollectionType": "movies",
+                        ]
+                    )
+                ]
+            ],
+            itemsByLibraryID: [
+                "movies": [
+                    JellyfinMediaItem(
+                        payload: [
+                            "Id": "movie-1",
+                            "Name": "Paprika",
+                            "Type": "Movie",
+                        ]
+                    )
+                ]
+            ]
+        )
+
+        let store = JellyfinStore(client: client)
+        store.accounts = [removedAccount, remainingAccount]
+        store.selectedAccountID = removedAccountID
+        store.selectedLibraryID = "old-library"
+        store.items = [
+            JellyfinMediaItem(
+                payload: [
+                    "Id": "old-item",
+                    "Name": "Old Item",
+                    "Type": "Movie",
+                ]
+            )
+        ]
+
+        try await store.removeAccount(removedAccountID)
+
+        XCTAssertEqual(store.selectedAccountID, remainingAccountID)
+        XCTAssertEqual(store.selectedLibraryID, "movies")
+        XCTAssertEqual(store.items.map(\.id), ["movie-1"])
+    }
 }

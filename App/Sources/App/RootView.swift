@@ -4,10 +4,13 @@ import UniformTypeIdentifiers
 
 #if os(macOS)
     import AppKit
+#elseif canImport(UIKit)
+    import UIKit
 #endif
 
 private enum MobileRootTab: Hashable {
     case home
+    case files
     case library
     case player
 }
@@ -23,7 +26,7 @@ struct RootView: View {
     @State private var splitViewVisibility: NavigationSplitViewVisibility = .all
     @State private var playbackChromeVisible = false
     @State private var playbackChromeAutoHideTask: Task<Void, Never>?
-    @State private var workspaceSection: WorkspaceSection = .library
+    @State private var workspaceSection: WorkspaceSection = .home
     @State private var jellyfinLibrarySearch = ""
     @State private var hasActivePlayback = false
     @State private var lastObservedPlaybackURL: URL?
@@ -102,10 +105,15 @@ struct RootView: View {
                         mobileDanmakuSheetPresented = false
                     #endif
                     hidePlaybackChrome()
-                    if coordinator.activeJellyfinAccount != nil {
-                        workspaceSection = .library
+                    if let activeID = coordinator.activeJellyfinAccount?.id {
+                        workspaceSection = .library(activeID)
                         #if !os(macOS)
                             mobileTab = .library
+                        #endif
+                    } else {
+                        workspaceSection = .home
+                        #if !os(macOS)
+                            mobileTab = .home
                         #endif
                     }
                 } else {
@@ -133,6 +141,22 @@ struct RootView: View {
                 newValue in
                 playbackIsRemote = newValue
             }
+            #if !os(macOS)
+                .onAppear {
+                    guard !isIOSVideoFullscreen else { return }
+                    StarmineiOSOrientationController
+                        .restoreDefaultOrientationBehavior()
+                }
+                .onReceive(
+                    NotificationCenter.default.publisher(
+                        for: UIApplication.didBecomeActiveNotification
+                    )
+                ) { _ in
+                    guard !isIOSVideoFullscreen else { return }
+                    StarmineiOSOrientationController
+                        .restoreDefaultOrientationBehavior()
+                }
+            #endif
             .onReceive(
                 playback.$snapshot.map(PlaybackSurfaceState.init(snapshot:))
                     .removeDuplicates()
@@ -161,8 +185,8 @@ struct RootView: View {
                 selectedSubtitleTrackTitle = newValue
             }
             .onChange(of: jellyfin.selectedAccountID) { newValue in
-                guard newValue != nil, !hasActivePlayback else { return }
-                workspaceSection = .library
+                guard let newValue = newValue, !hasActivePlayback else { return }
+                workspaceSection = .library(newValue)
                 #if !os(macOS)
                     mobileTab = .library
                 #endif
@@ -172,7 +196,12 @@ struct RootView: View {
             }
             .onChange(of: workspaceSection) { newValue in
                 #if !os(macOS)
-                    mobileTab = newValue == .library ? .library : .player
+                    switch newValue {
+                    case .home: mobileTab = .home
+                    case .files: mobileTab = .files
+                    case .library: mobileTab = .library
+                    case .player: mobileTab = .player
+                    }
                 #endif
             }
             #if !os(macOS)
@@ -192,9 +221,13 @@ struct RootView: View {
                     }
                     switch newValue {
                     case .home:
-                        break
+                        workspaceSection = .home
+                    case .files:
+                        workspaceSection = .files
                     case .library:
-                        workspaceSection = .library
+                        if let id = coordinator.activeJellyfinAccount?.id {
+                            workspaceSection = .library(id)
+                        }
                     case .player:
                         workspaceSection = .player
                     }
@@ -295,20 +328,31 @@ struct RootView: View {
         private var mobileTabContent: some View {
             TabView(selection: $mobileTab) {
                 NavigationStack {
-                    SidebarView(
+                    ZStack {
+                        Palette.canvas.ignoresSafeArea()
+                        homeScreenPlaceholder
+                    }
+                    .navigationTitle("主页")
+                }
+                .tabItem {
+                    Label("主页", systemImage: "house.fill")
+                }
+                .tag(MobileRootTab.home)
+
+                NavigationStack {
+                    FilesWorkspaceView(
                         coordinator: coordinator,
-                        playback: playback,
-                        danmaku: danmaku,
                         jellyfin: jellyfin,
                         importerPresented: $importerPresented,
                         workspaceSection: $workspaceSection,
                         prefersTouchLayout: true
                     )
+                    .navigationTitle("文件")
                 }
                 .tabItem {
-                    Label("主页", systemImage: "square.grid.2x2.fill")
+                    Label("文件", systemImage: "folder.fill")
                 }
-                .tag(MobileRootTab.home)
+                .tag(MobileRootTab.files)
 
                 NavigationStack {
                     mobileLibraryScreen
@@ -479,22 +523,24 @@ struct RootView: View {
         }
     #endif
 
-    private var splitViewContent: some View {
-        NavigationSplitView(columnVisibility: $splitViewVisibility) {
-            SidebarView(
-                coordinator: coordinator,
-                playback: playback,
-                danmaku: danmaku,
-                jellyfin: jellyfin,
-                importerPresented: $importerPresented,
-                workspaceSection: $workspaceSection
-            )
-            .navigationSplitViewColumnWidth(min: 290, ideal: 320, max: 360)
-        } detail: {
-            detail
+    #if os(macOS)
+        private var splitViewContent: some View {
+            NavigationSplitView(columnVisibility: $splitViewVisibility) {
+                SidebarView(
+                    coordinator: coordinator,
+                    playback: playback,
+                    danmaku: danmaku,
+                    jellyfin: jellyfin,
+                    importerPresented: $importerPresented,
+                    workspaceSection: $workspaceSection
+                )
+                .navigationSplitViewColumnWidth(min: 240, ideal: 260, max: 320)
+            } detail: {
+                detail
+            }
+            .navigationSplitViewStyle(.balanced)
         }
-        .navigationSplitViewStyle(.balanced)
-    }
+    #endif
 
     private var detail: some View {
         ZStack {
@@ -509,7 +555,18 @@ struct RootView: View {
                         .padding(.horizontal, 24)
                         .padding(.top, 20)
 
-                    if workspaceSection == .library {
+                    switch workspaceSection {
+                    case .home:
+                        homeScreenPlaceholder
+                    case .files:
+                        FilesWorkspaceView(
+                            coordinator: coordinator,
+                            jellyfin: jellyfin,
+                            importerPresented: $importerPresented,
+                            workspaceSection: $workspaceSection,
+                            prefersTouchLayout: false
+                        )
+                    case .library:
                         LibraryWorkspaceView(
                             coordinator: coordinator,
                             jellyfin: jellyfin,
@@ -519,7 +576,7 @@ struct RootView: View {
                         )
                         .padding(.horizontal, 24)
                         .padding(.bottom, 24)
-                    } else {
+                    case .player:
                         playbackWorkspace
                     }
                 }
@@ -686,9 +743,9 @@ struct RootView: View {
             .buttonStyle(.borderedProminent)
             .tint(Palette.accentDeep)
 
-            if coordinator.activeJellyfinAccount != nil {
+            if let activeAccountID = coordinator.activeJellyfinAccount?.id {
                 Button {
-                    workspaceSection = .library
+                    workspaceSection = .library(activeAccountID)
                 } label: {
                     Label("进入媒体库", systemImage: "rectangle.stack.fill")
                         .font(
@@ -707,9 +764,33 @@ struct RootView: View {
         }
     }
 
+    
+    private var homeScreenPlaceholder: some View {
+        VStack(spacing: 16) {
+            Image(systemName: "sparkles")
+                .font(.system(size: 64, weight: .regular))
+                .foregroundStyle(Palette.accent.opacity(0.8))
+            Text("欢迎使用 Starmine")
+                .font(.system(size: 24, weight: .bold, design: .rounded))
+            Text("播放状态跟踪与更多功能敬请期待。")
+                .font(.system(size: 15, weight: .medium, design: .rounded))
+                .foregroundStyle(Palette.ink.opacity(0.6))
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    private var workspaceHeaderTitle: String {
+        switch workspaceSection {
+        case .home: return "主页"
+        case .files: return "文件"
+        case .library: return "媒体库节目"
+        case .player: return "播放器"
+        }
+    }
+
     private var workspaceHeader: some View {
         HStack(spacing: 18) {
-            if workspaceSection == .library,
+            if case .library = workspaceSection,
                 coordinator.selectedJellyfinItem != nil
             {
                 Button {
@@ -730,7 +811,7 @@ struct RootView: View {
             }
 
             VStack(alignment: .leading, spacing: 6) {
-                Text(workspaceSection == .library ? "媒体库节目" : "播放器")
+                Text(workspaceHeaderTitle)
                     .font(.system(size: 24, weight: .bold, design: .rounded))
                     .foregroundStyle(Palette.ink)
                 if !workspaceSummaryText.isEmpty {
@@ -745,12 +826,7 @@ struct RootView: View {
 
             Spacer(minLength: 12)
 
-            Picker("", selection: $workspaceSection) {
-                Text("媒体库").tag(WorkspaceSection.library)
-                Text("播放器").tag(WorkspaceSection.player)
-            }
-            .pickerStyle(.segmented)
-            .frame(maxWidth: 240)
+            
 
             if let account = coordinator.activeJellyfinAccount {
                 HeaderCapsule(
@@ -779,6 +855,8 @@ struct RootView: View {
 
     private var workspaceSummaryText: String {
         switch workspaceSection {
+        case .home, .files:
+            return ""
         case .library:
             if let item = coordinator.selectedJellyfinItem {
                 return item.metaLine.isEmpty

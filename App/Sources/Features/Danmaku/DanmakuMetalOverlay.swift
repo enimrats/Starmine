@@ -252,16 +252,28 @@ import simd
                 scheduleDeferredRedraw(for: view)
                 return
             }
-            metalRenderer?.draw(in: view, drawable: drawable)
+            guard drawableMatchesView(drawable, view: view) else {
+                scheduleDeferredRedraw(for: view)
+                return
+            }
+            guard
+                let descriptor = view.currentRenderPassDescriptor,
+                renderPassDescriptor(descriptor, matches: drawable)
+            else {
+                scheduleDeferredRedraw(for: view)
+                return
+            }
+            metalRenderer?.draw(descriptor: descriptor, drawable: drawable)
         }
 
         func mtkView(_ view: MTKView, drawableSizeWillChange size: CGSize) {}
 
         private func redrawUsingLatestState(on view: PassthroughDanmakuMTKView)
         {
+            let resolvedViewportSize = view.bounds.size
             guard
-                latestRequestedViewportSize.width > 0,
-                latestRequestedViewportSize.height > 0
+                resolvedViewportSize.width > 0.5,
+                resolvedViewportSize.height > 0.5
             else {
                 return
             }
@@ -269,7 +281,7 @@ import simd
             refresh(
                 view: view,
                 playbackTime: latestPlaybackTime,
-                requestedViewportSize: latestRequestedViewportSize,
+                requestedViewportSize: resolvedViewportSize,
                 metrics: latestMetrics
             )
         }
@@ -303,6 +315,16 @@ import simd
             if drawableSizeChanged {
                 view.drawableSize = drawableSize
             }
+            if let metalLayer = view.layer as? CAMetalLayer {
+                let layerDrawableSizeChanged =
+                    abs(metalLayer.drawableSize.width - drawableSize.width)
+                    > 0.5
+                    || abs(metalLayer.drawableSize.height - drawableSize.height)
+                        > 0.5
+                if layerDrawableSizeChanged {
+                    metalLayer.drawableSize = drawableSize
+                }
+            }
 
             store.sync(
                 playbackTime: playbackTime,
@@ -329,17 +351,16 @@ import simd
             for view: MTKView,
             requestedViewportSize: CGSize
         ) -> CGSize {
+            let boundsSize = view.bounds.size
+            if boundsSize.width > 0.5, boundsSize.height > 0.5 {
+                return boundsSize
+            }
             if requestedViewportSize.width > 0.5,
                 requestedViewportSize.height > 0.5
             {
                 return requestedViewportSize
             }
-
-            let boundsSize = view.bounds.size
-            guard boundsSize.width > 0.5, boundsSize.height > 0.5 else {
-                return .zero
-            }
-            return boundsSize
+            return .zero
         }
 
         private func resolvedScaleFactor(for view: MTKView) -> CGFloat {
@@ -355,6 +376,40 @@ import simd
             DispatchQueue.main.async { [weak view] in
                 view?.draw()
             }
+        }
+
+        private func drawableMatchesView(
+            _ drawable: CAMetalDrawable,
+            view: MTKView
+        ) -> Bool {
+            let expectedDrawableSize = view.drawableSize
+            guard
+                expectedDrawableSize.width > 0.5,
+                expectedDrawableSize.height > 0.5
+            else {
+                return false
+            }
+
+            return
+                abs(CGFloat(drawable.texture.width) - expectedDrawableSize.width)
+                <= 1
+                && abs(
+                    CGFloat(drawable.texture.height)
+                        - expectedDrawableSize.height
+                ) <= 1
+        }
+
+        private func renderPassDescriptor(
+            _ descriptor: MTLRenderPassDescriptor,
+            matches drawable: CAMetalDrawable
+        ) -> Bool {
+            guard let colorAttachment = descriptor.colorAttachments[0].texture
+            else {
+                return false
+            }
+
+            return colorAttachment.width == drawable.texture.width
+                && colorAttachment.height == drawable.texture.height
         }
     }
 
@@ -516,9 +571,11 @@ import simd
             )
         }
 
-        func draw(in view: MTKView, drawable: CAMetalDrawable) {
+        func draw(
+            descriptor: MTLRenderPassDescriptor,
+            drawable: CAMetalDrawable
+        ) {
             guard
-                let descriptor = view.currentRenderPassDescriptor,
                 let commandBuffer = commandQueue.makeCommandBuffer()
             else {
                 return

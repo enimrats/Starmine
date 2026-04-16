@@ -30,16 +30,20 @@ enum StarmineiOSOrientationController {
 
     static func enterVideoFullscreen() {
         supportedOrientations = .landscape
-        requestOrientation(.landscapeRight)
+        requestOrientationMask(.landscape)
     }
 
     static func exitVideoFullscreen() {
-        supportedOrientations = .allButUpsideDown
-        requestOrientation(.portrait)
+        restoreDefaultOrientationBehavior()
     }
 
-    private static func requestOrientation(
-        _ orientation: UIInterfaceOrientation
+    static func restoreDefaultOrientationBehavior() {
+        supportedOrientations = .allButUpsideDown
+        requestOrientationMask(.allButUpsideDown)
+    }
+
+    private static func requestOrientationMask(
+        _ orientations: UIInterfaceOrientationMask
     ) {
         guard
             let windowScene = UIApplication.shared.connectedScenes
@@ -50,34 +54,16 @@ enum StarmineiOSOrientationController {
         }
 
         windowScene.windows.forEach { window in
-            window.rootViewController?.setNeedsUpdateOfSupportedInterfaceOrientations()
+            window.rootViewController?
+                .setNeedsUpdateOfSupportedInterfaceOrientations()
         }
 
         windowScene.requestGeometryUpdate(
-            .iOS(interfaceOrientations: UIInterfaceOrientationMask(orientation))
+            .iOS(interfaceOrientations: orientations)
         ) { error in
             #if DEBUG
                 print("[orientation] \(error.localizedDescription)")
             #endif
-        }
-
-        UIViewController.attemptRotationToDeviceOrientation()
-    }
-}
-
-private extension UIInterfaceOrientationMask {
-    init(_ orientation: UIInterfaceOrientation) {
-        switch orientation {
-        case .portrait:
-            self = .portrait
-        case .portraitUpsideDown:
-            self = .portraitUpsideDown
-        case .landscapeLeft:
-            self = .landscapeLeft
-        case .landscapeRight:
-            self = .landscapeRight
-        default:
-            self = .allButUpsideDown
         }
     }
 }

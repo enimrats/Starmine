@@ -237,10 +237,15 @@ final class AppCoordinator: ObservableObject {
     }
 
     func removeSelectedJellyfinAccount() {
+        guard let accountID = jellyfin.selectedAccountID else { return }
+        removeJellyfinAccount(accountID)
+    }
+
+    func removeJellyfinAccount(_ accountID: UUID) {
         Task { [weak self] in
             guard let self else { return }
             do {
-                try await self.jellyfin.removeSelectedAccount()
+                try await self.jellyfin.removeAccount(accountID)
                 self.syncJellyfinNavigation()
             } catch {
                 self.handleError(error)

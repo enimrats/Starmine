@@ -136,8 +136,16 @@ final class JellyfinStore: ObservableObject {
         guard let accountID = selectedAccountID else {
             throw JellyfinClientError.accountNotFound
         }
+        try await removeAccount(accountID)
+    }
+
+    func removeAccount(_ accountID: UUID) async throws {
+        let removedSelectedAccount = selectedAccountID == accountID
         let snapshot = try await client.removeAccount(accountID)
         applySnapshot(snapshot)
+
+        guard removedSelectedAccount else { return }
+
         clearBrowseState(clearLibraries: selectedAccountID == nil)
         if selectedAccountID != nil {
             try await refreshLibrary()
