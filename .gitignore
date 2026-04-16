@@ -1,0 +1,51 @@
+# macOS
+.DS_Store
+
+# Xcode user state
+*.xcuserstate
+*.xccheckout
+*.xcscmblueprint
+*.moved-aside
+*.pbxuser
+*.mode1v3
+*.mode2v3
+*.perspectivev3
+**/xcuserdata/
+
+# Xcode and Swift build products
+DerivedData/
+.build/
+**/.build/
+build/
+Build/
+*.app
+*.appex
+*.framework
+*.dSYM
+*.dSYM.zip
+*.xcarchive
+*.xcresult
+*.ipa
+
+# SwiftPM local state
+.swiftpm/
+**/.swiftpm/
+
+# Downloaded / generated vendor binaries
+Vendor/downloads/
+Vendor/xcframeworks/
+Vendor/MPVKit-0.41.0/dist/
+Vendor/MPVKit-0.41.0/release/
+
+# Generic compiled objects and temp files
+*.o
+*.obj
+*.a
+*.so
+*.dylib
+*.dll
+*.exe
+*.out
+*.swp
+*.swo
+*~

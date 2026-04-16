@@ -1,0 +1,552 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 46;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		08A99CA58B412F436E049F63 /* Foundation.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 3FF1CBFE6EC55653B9D785C5 /* Foundation.framework */; };
+		0FA369BC2D283B0E4C3BEE8F /* MPVVideoHost.swift in Sources */ = {isa = PBXBuildFile; fileRef = F46AE8AC1EA4E08A13BC3FA1 /* MPVVideoHost.swift */; };
+		1375044B5246C02608B32E23 /* MPVKit in Frameworks */ = {isa = PBXBuildFile; productRef = 0A70D3EDB9180BD5CC1DB3F8 /* MPVKit */; };
+		2007152F3B940246B7F93B67 /* Models.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7AA853F29B33FB15393D4582 /* Models.swift */; };
+		3235437B5B4A8EAEAAF3CABB /* MPVVideoHost.swift in Sources */ = {isa = PBXBuildFile; fileRef = F46AE8AC1EA4E08A13BC3FA1 /* MPVVideoHost.swift */; };
+		419B8077C6C6F36EBB5D011E /* MPVPlayerController.swift in Sources */ = {isa = PBXBuildFile; fileRef = FD38E135FF87C6AABAE1DAEC /* MPVPlayerController.swift */; };
+		41EB4DC7DD67E9FEFBE41617 /* RootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5E63873282CB409C6C6FF51 /* RootView.swift */; };
+		52BE3292FE83B1D019FC6470 /* AppModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 11BE46970EA33B0526E9D579 /* AppModel.swift */; };
+		55ADC8E4239AB392EDCBB55C /* Models.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7AA853F29B33FB15393D4582 /* Models.swift */; };
+		57B71BF94D30DE479226C407 /* DandanplayClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9E4C37DE2DA0DA59A5AD8F48 /* DandanplayClient.swift */; };
+		5D356F9880C23B9D3C833DA0 /* Cocoa.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 9D1D60047F3996A8D51B6A0E /* Cocoa.framework */; };
+		5EB31641EE6518E3AFC6146B /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = CBE4BE6EA816E6110D3972B4 /* Assets.xcassets */; };
+		69FD368BEDBE729ECC71BB21 /* StarmineMacApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = E1DE375EBDC42CF76F158F25 /* StarmineMacApp.swift */; };
+		6B00F5D14F5105E6FBB39DE2 /* MPVKit in Frameworks */ = {isa = PBXBuildFile; productRef = 05AB851A3810C2948D57DF76 /* MPVKit */; };
+		6DED7353D786F83192380159 /* AppModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 11BE46970EA33B0526E9D579 /* AppModel.swift */; };
+		77BE162C5559D30346442C52 /* DandanplayClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9E4C37DE2DA0DA59A5AD8F48 /* DandanplayClient.swift */; };
+		A3479B095B01290AB336C928 /* DanmakuOverlayStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = C152A1AB78533DCDFEC545EC /* DanmakuOverlayStore.swift */; };
+		AC088AAAFF37218F341E48B6 /* StarmineiOSApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3B723478DC13AA46E32C10C7 /* StarmineiOSApp.swift */; };
+		B5CD8F399609A7ADAAEB10F0 /* DanmakuOverlayStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = C152A1AB78533DCDFEC545EC /* DanmakuOverlayStore.swift */; };
+		BAD23A7F477E2E9101D76754 /* RootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5E63873282CB409C6C6FF51 /* RootView.swift */; };
+		E9561A8568D84614E3A335FB /* MPVPlayerController.swift in Sources */ = {isa = PBXBuildFile; fileRef = FD38E135FF87C6AABAE1DAEC /* MPVPlayerController.swift */; };
+		F69CEA1A7A2376A210FBEC6E /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = CBE4BE6EA816E6110D3972B4 /* Assets.xcassets */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXFileReference section */
+		11BE46970EA33B0526E9D579 /* AppModel.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = AppModel.swift; sourceTree = "<group>"; };
+		39260440FE5B1622AA970AEC /* MPVKit */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = wrapper; name = MPVKit; path = "Vendor/MPVKit-0.41.0"; sourceTree = "<group>"; };
+		3B723478DC13AA46E32C10C7 /* StarmineiOSApp.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = StarmineiOSApp.swift; sourceTree = "<group>"; };
+		3FF1CBFE6EC55653B9D785C5 /* Foundation.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Foundation.framework; path = Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS18.0.sdk/System/Library/Frameworks/Foundation.framework; sourceTree = DEVELOPER_DIR; };
+		7AA853F29B33FB15393D4582 /* Models.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = Models.swift; sourceTree = "<group>"; };
+		9D1D60047F3996A8D51B6A0E /* Cocoa.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Cocoa.framework; path = Platforms/MacOSX.platform/Developer/SDKs/MacOSX15.0.sdk/System/Library/Frameworks/Cocoa.framework; sourceTree = DEVELOPER_DIR; };
+		9E4C37DE2DA0DA59A5AD8F48 /* DandanplayClient.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = DandanplayClient.swift; sourceTree = "<group>"; };
+		A309581C54BFD8482AE8A2C5 /* Starmine macOS.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "Starmine macOS.app"; sourceTree = BUILT_PRODUCTS_DIR; };
+		A5E63873282CB409C6C6FF51 /* RootView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = RootView.swift; sourceTree = "<group>"; };
+		C152A1AB78533DCDFEC545EC /* DanmakuOverlayStore.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = DanmakuOverlayStore.swift; sourceTree = "<group>"; };
+		CBE4BE6EA816E6110D3972B4 /* Assets.xcassets */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		DA224ABC442BC6DB8F4DDB9C /* Starmine iOS.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "Starmine iOS.app"; sourceTree = BUILT_PRODUCTS_DIR; };
+		E1DE375EBDC42CF76F158F25 /* StarmineMacApp.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = StarmineMacApp.swift; sourceTree = "<group>"; };
+		F46AE8AC1EA4E08A13BC3FA1 /* MPVVideoHost.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = MPVVideoHost.swift; sourceTree = "<group>"; };
+		FD38E135FF87C6AABAE1DAEC /* MPVPlayerController.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = MPVPlayerController.swift; sourceTree = "<group>"; };
+/* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		64231E2A7E98BF3BFD3CD2F6 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				08A99CA58B412F436E049F63 /* Foundation.framework in Frameworks */,
+				1375044B5246C02608B32E23 /* MPVKit in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		DFF4423876A925D71C3C8312 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				5D356F9880C23B9D3C833DA0 /* Cocoa.framework in Frameworks */,
+				6B00F5D14F5105E6FBB39DE2 /* MPVKit in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		2FC43439BAA219A1E98B3CF2 /* iOS */ = {
+			isa = PBXGroup;
+			children = (
+				3FF1CBFE6EC55653B9D785C5 /* Foundation.framework */,
+			);
+			name = iOS;
+			sourceTree = "<group>";
+		};
+		3CEADD2036C2D110AAC30B40 /* App/Resources */ = {
+			isa = PBXGroup;
+			children = (
+				CBE4BE6EA816E6110D3972B4 /* Assets.xcassets */,
+			);
+			name = App/Resources;
+			path = App/Resources;
+			sourceTree = "<group>";
+		};
+		51793F710FF0DD13B88D1CC1 /* App/Sources */ = {
+			isa = PBXGroup;
+			children = (
+				11BE46970EA33B0526E9D579 /* AppModel.swift */,
+				9E4C37DE2DA0DA59A5AD8F48 /* DandanplayClient.swift */,
+				C152A1AB78533DCDFEC545EC /* DanmakuOverlayStore.swift */,
+				FD38E135FF87C6AABAE1DAEC /* MPVPlayerController.swift */,
+				F46AE8AC1EA4E08A13BC3FA1 /* MPVVideoHost.swift */,
+				7AA853F29B33FB15393D4582 /* Models.swift */,
+				E1DE375EBDC42CF76F158F25 /* StarmineMacApp.swift */,
+				3B723478DC13AA46E32C10C7 /* StarmineiOSApp.swift */,
+				A5E63873282CB409C6C6FF51 /* RootView.swift */,
+			);
+			name = App/Sources;
+			path = App/Sources;
+			sourceTree = "<group>";
+		};
+		85F05179973695840015D19E = {
+			isa = PBXGroup;
+			children = (
+				C0AABAA60123EC4EA6A5F50E /* Products */,
+				ED274A9D4E02B68C84224791 /* Frameworks */,
+				51793F710FF0DD13B88D1CC1 /* App/Sources */,
+				3CEADD2036C2D110AAC30B40 /* App/Resources */,
+			);
+			sourceTree = "<group>";
+		};
+		C0AABAA60123EC4EA6A5F50E /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				DA224ABC442BC6DB8F4DDB9C /* Starmine iOS.app */,
+				A309581C54BFD8482AE8A2C5 /* Starmine macOS.app */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+		E7CBD4314F04DE504C914F03 /* OS X */ = {
+			isa = PBXGroup;
+			children = (
+				9D1D60047F3996A8D51B6A0E /* Cocoa.framework */,
+			);
+			name = "OS X";
+			sourceTree = "<group>";
+		};
+		ED274A9D4E02B68C84224791 /* Frameworks */ = {
+			isa = PBXGroup;
+			children = (
+				39260440FE5B1622AA970AEC /* MPVKit */,
+				2FC43439BAA219A1E98B3CF2 /* iOS */,
+				E7CBD4314F04DE504C914F03 /* OS X */,
+			);
+			name = Frameworks;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		1C470127E98790FB3FA537ED /* Starmine macOS */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = E615B3B6211260EF27269EFE /* Build configuration list for PBXNativeTarget "Starmine macOS" */;
+			buildPhases = (
+				4B89871C6A84FA64844EA7BD /* Sources */,
+				DFF4423876A925D71C3C8312 /* Frameworks */,
+				8F63381188C6586A8E1E6A62 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = "Starmine macOS";
+			packageProductDependencies = (
+				05AB851A3810C2948D57DF76 /* MPVKit */,
+			);
+			productName = "Starmine macOS";
+			productReference = A309581C54BFD8482AE8A2C5 /* Starmine macOS.app */;
+			productType = "com.apple.product-type.application";
+		};
+		2DF6C7A4FACA0D4DC1FE50FF /* Starmine iOS */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 6DDEE71199E91122E9CBF755 /* Build configuration list for PBXNativeTarget "Starmine iOS" */;
+			buildPhases = (
+				0F5EFD0177115FD2A7DEA6AE /* Sources */,
+				64231E2A7E98BF3BFD3CD2F6 /* Frameworks */,
+				900F96B6EC7560A43B9BFDE0 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = "Starmine iOS";
+			packageProductDependencies = (
+				0A70D3EDB9180BD5CC1DB3F8 /* MPVKit */,
+			);
+			productName = "Starmine iOS";
+			productReference = DA224ABC442BC6DB8F4DDB9C /* Starmine iOS.app */;
+			productType = "com.apple.product-type.application";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		B9C79E456032205B3BE52777 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				LastSwiftUpdateCheck = 1640;
+				LastUpgradeCheck = 1640;
+			};
+			buildConfigurationList = 1590D889136607484868B342 /* Build configuration list for PBXProject "StarmineApple" */;
+			compatibilityVersion = "Xcode 16.0";
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				en,
+				Base,
+			);
+			mainGroup = 85F05179973695840015D19E;
+			minimizedProjectReferenceProxies = 0;
+			packageReferences = (
+				A53BAE94BC6D506593B4B182 /* XCLocalSwiftPackageReference "MPVKit-0.41.0" */,
+			);
+			preferredProjectObjectVersion = 77;
+			productRefGroup = C0AABAA60123EC4EA6A5F50E /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				2DF6C7A4FACA0D4DC1FE50FF /* Starmine iOS */,
+				1C470127E98790FB3FA537ED /* Starmine macOS */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		8F63381188C6586A8E1E6A62 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				F69CEA1A7A2376A210FBEC6E /* Assets.xcassets in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		900F96B6EC7560A43B9BFDE0 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				5EB31641EE6518E3AFC6146B /* Assets.xcassets in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		0F5EFD0177115FD2A7DEA6AE /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				6DED7353D786F83192380159 /* AppModel.swift in Sources */,
+				57B71BF94D30DE479226C407 /* DandanplayClient.swift in Sources */,
+				A3479B095B01290AB336C928 /* DanmakuOverlayStore.swift in Sources */,
+				419B8077C6C6F36EBB5D011E /* MPVPlayerController.swift in Sources */,
+				3235437B5B4A8EAEAAF3CABB /* MPVVideoHost.swift in Sources */,
+				55ADC8E4239AB392EDCBB55C /* Models.swift in Sources */,
+				AC088AAAFF37218F341E48B6 /* StarmineiOSApp.swift in Sources */,
+				BAD23A7F477E2E9101D76754 /* RootView.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		4B89871C6A84FA64844EA7BD /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				52BE3292FE83B1D019FC6470 /* AppModel.swift in Sources */,
+				77BE162C5559D30346442C52 /* DandanplayClient.swift in Sources */,
+				B5CD8F399609A7ADAAEB10F0 /* DanmakuOverlayStore.swift in Sources */,
+				E9561A8568D84614E3A335FB /* MPVPlayerController.swift in Sources */,
+				0FA369BC2D283B0E4C3BEE8F /* MPVVideoHost.swift in Sources */,
+				2007152F3B940246B7F93B67 /* Models.swift in Sources */,
+				69FD368BEDBE729ECC71BB21 /* StarmineMacApp.swift in Sources */,
+				41EB4DC7DD67E9FEFBE41617 /* RootView.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin XCBuildConfiguration section */
+		085AFBF197A73F701FF7D825 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				ENABLE_NS_ASSERTIONS = NO;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				MTL_ENABLE_DEBUG_INFO = NO;
+				MTL_FAST_MATH = YES;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_COMPILATION_MODE = wholemodule;
+				SWIFT_OPTIMIZATION_LEVEL = "-O";
+				SWIFT_VERSION = 5.0;
+			};
+			name = Release;
+		};
+		1E6F929922A7E2506CB85876 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CLANG_ENABLE_MODULES = YES;
+				CODE_SIGN_STYLE = Automatic;
+				COMBINE_HIDPI_IMAGES = YES;
+				CURRENT_PROJECT_VERSION = 1;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_CFBundleDisplayName = Starmine;
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.entertainment";
+				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
+				LD_RUNPATH_SEARCH_PATHS = "$(inherited) @executable_path/../Frameworks";
+				MACOSX_DEPLOYMENT_TARGET = 13.0;
+				MARKETING_VERSION = 0.1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = io.github.Starmine.apple.macos;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = macosx;
+				SUPPORTED_PLATFORMS = macosx;
+				SWIFT_VERSION = 5.10;
+				TARGETED_DEVICE_FAMILY = "";
+			};
+			name = Debug;
+		};
+		211E8C421014B6F1403FAD69 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_WEAK = NO;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_CFBundleDisplayName = Starmine;
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.entertainment";
+				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
+				LD_RUNPATH_SEARCH_PATHS = "$(inherited) @executable_path/Frameworks";
+				MACOSX_DEPLOYMENT_TARGET = 13.0;
+				MARKETING_VERSION = 0.1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = io.github.Starmine.apple.ios;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SUPPORTED_PLATFORMS = "iphonesimulator iphoneos";
+				SWIFT_VERSION = 5.10;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		455B2D3BFE22BFC8E474551D /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CLANG_ENABLE_MODULES = YES;
+				CODE_SIGN_STYLE = Automatic;
+				COMBINE_HIDPI_IMAGES = YES;
+				CURRENT_PROJECT_VERSION = 1;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_CFBundleDisplayName = Starmine;
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.entertainment";
+				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
+				LD_RUNPATH_SEARCH_PATHS = "$(inherited) @executable_path/../Frameworks";
+				MACOSX_DEPLOYMENT_TARGET = 13.0;
+				MARKETING_VERSION = 0.1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = io.github.Starmine.apple.macos;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = macosx;
+				SUPPORTED_PLATFORMS = macosx;
+				SWIFT_VERSION = 5.10;
+				TARGETED_DEVICE_FAMILY = "";
+			};
+			name = Release;
+		};
+		62478D74078549566BE42019 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_WEAK = NO;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_CFBundleDisplayName = Starmine;
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.entertainment";
+				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
+				LD_RUNPATH_SEARCH_PATHS = "$(inherited) @executable_path/Frameworks";
+				MACOSX_DEPLOYMENT_TARGET = 13.0;
+				MARKETING_VERSION = 0.1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = io.github.Starmine.apple.ios;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SUPPORTED_PLATFORMS = "iphonesimulator iphoneos";
+				SWIFT_VERSION = 5.10;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				VALIDATE_PRODUCT = YES;
+			};
+			name = Release;
+		};
+		F27ADB6089E91C614AB8B788 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_TESTABILITY = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_DYNAMIC_NO_PIC = NO;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"DEBUG=1",
+					"$(inherited)",
+				);
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				MTL_FAST_MATH = YES;
+				ONLY_ACTIVE_ARCH = YES;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				SWIFT_VERSION = 5.0;
+			};
+			name = Debug;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		1590D889136607484868B342 /* Build configuration list for PBXProject "StarmineApple" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				F27ADB6089E91C614AB8B788 /* Debug */,
+				085AFBF197A73F701FF7D825 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		6DDEE71199E91122E9CBF755 /* Build configuration list for PBXNativeTarget "Starmine iOS" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				62478D74078549566BE42019 /* Release */,
+				211E8C421014B6F1403FAD69 /* Debug */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		E615B3B6211260EF27269EFE /* Build configuration list for PBXNativeTarget "Starmine macOS" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				455B2D3BFE22BFC8E474551D /* Release */,
+				1E6F929922A7E2506CB85876 /* Debug */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+/* End XCConfigurationList section */
+
+/* Begin XCLocalSwiftPackageReference section */
+		A53BAE94BC6D506593B4B182 /* XCLocalSwiftPackageReference "MPVKit-0.41.0" */ = {
+			isa = XCLocalSwiftPackageReference;
+			path = "Vendor/MPVKit-0.41.0";
+			relativePath = "Vendor/MPVKit-0.41.0";
+		};
+/* End XCLocalSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		05AB851A3810C2948D57DF76 /* MPVKit */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = A53BAE94BC6D506593B4B182 /* XCLocalSwiftPackageReference "MPVKit-0.41.0" */;
+			productName = MPVKit;
+		};
+		0A70D3EDB9180BD5CC1DB3F8 /* MPVKit */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = A53BAE94BC6D506593B4B182 /* XCLocalSwiftPackageReference "MPVKit-0.41.0" */;
+			productName = MPVKit;
+		};
+/* End XCSwiftPackageProductDependency section */
+	};
+	rootObject = B9C79E456032205B3BE52777 /* Project object */;
+}
