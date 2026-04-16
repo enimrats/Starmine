@@ -185,13 +185,24 @@ struct RootView: View {
                 selectedSubtitleTrackTitle = newValue
             }
             .onChange(of: jellyfin.selectedAccountID) { newValue in
-                guard let newValue = newValue, !hasActivePlayback else {
-                    return
+                guard !hasActivePlayback else { return }
+
+                switch workspaceSection {
+                case .library:
+                    if let newValue {
+                        workspaceSection = .library(newValue)
+                        #if !os(macOS)
+                            mobileTab = .library
+                        #endif
+                    } else {
+                        workspaceSection = .home
+                        #if !os(macOS)
+                            mobileTab = .home
+                        #endif
+                    }
+                default:
+                    break
                 }
-                workspaceSection = .library(newValue)
-                #if !os(macOS)
-                    mobileTab = .library
-                #endif
             }
             .onChange(of: jellyfin.selectedLibraryID) { _ in
                 jellyfinLibrarySearch = ""
