@@ -26,11 +26,40 @@ protocol JellyfinClientProtocol {
         async throws -> [JellyfinEpisode]
     func loadAdjacentEpisodes(accountID: UUID, episodeID: String) async throws
         -> [JellyfinEpisode]
+    func loadResumeItems(accountID: UUID, limit: Int) async throws
+        -> [JellyfinHomeItem]
+    func loadRecentItems(accountID: UUID, limit: Int) async throws
+        -> [JellyfinHomeItem]
+    func loadNextUp(accountID: UUID, limit: Int) async throws
+        -> [JellyfinHomeItem]
+    func loadRecommendedItems(accountID: UUID, limit: Int) async throws
+        -> [JellyfinHomeItem]
     func createPlaybackSession(
         accountID: UUID,
         itemID: String,
         mediaSourceID: String?
     ) async throws -> JellyfinPlaybackSession
+    func reportPlaybackStarted(
+        accountID: UUID,
+        session: JellyfinPlaybackSession,
+        positionSeconds: Double,
+        isPaused: Bool
+    ) async throws
+    func reportPlaybackProgress(
+        accountID: UUID,
+        session: JellyfinPlaybackSession,
+        positionSeconds: Double,
+        isPaused: Bool
+    ) async throws
+    func reportPlaybackStopped(
+        accountID: UUID,
+        session: JellyfinPlaybackSession,
+        positionSeconds: Double,
+        isPaused: Bool,
+        finished: Bool
+    ) async throws
+    func markPlayed(accountID: UUID, itemID: String) async throws
+    func markUnplayed(accountID: UUID, itemID: String) async throws
 }
 
 actor JellyfinClient: JellyfinClientProtocol {
@@ -382,6 +411,63 @@ actor JellyfinClient: JellyfinClientProtocol {
             }
     }
 
+    func loadResumeItems(accountID: UUID, limit: Int = 18) async throws
+        -> [JellyfinHomeItem]
+    {
+        let response = try await authenticatedRequest(
+            accountID: accountID,
+            path:
+                "/Items/Resume?userId=\(try userID(for: accountID))&Limit=\(limit)&MediaTypes=Video&Fields=\(homeItemFields)"
+        )
+        let payload = try jsonObject(data: response.data)
+        return payload.dictionaries("Items").map(
+            JellyfinHomeItem.init(payload:)
+        )
+    }
+
+    func loadRecentItems(accountID: UUID, limit: Int = 18) async throws
+        -> [JellyfinHomeItem]
+    {
+        let userID = try userID(for: accountID)
+        let response = try await authenticatedRequest(
+            accountID: accountID,
+            path:
+                "/Users/\(userID)/Items?Recursive=true&IncludeItemTypes=Episode,Movie,Video&SortBy=DatePlayed&SortOrder=Descending&Filters=IsPlayed&Limit=\(limit)&Fields=\(homeItemFields)"
+        )
+        let payload = try jsonObject(data: response.data)
+        return payload.dictionaries("Items").map(
+            JellyfinHomeItem.init(payload:)
+        )
+    }
+
+    func loadNextUp(accountID: UUID, limit: Int = 18) async throws
+        -> [JellyfinHomeItem]
+    {
+        let response = try await authenticatedRequest(
+            accountID: accountID,
+            path:
+                "/Shows/NextUp?userId=\(try userID(for: accountID))&Limit=\(limit)&Fields=\(homeItemFields)"
+        )
+        let payload = try jsonObject(data: response.data)
+        return payload.dictionaries("Items").map(
+            JellyfinHomeItem.init(payload:)
+        )
+    }
+
+    func loadRecommendedItems(accountID: UUID, limit: Int = 18) async throws
+        -> [JellyfinHomeItem]
+    {
+        let response = try await authenticatedRequest(
+            accountID: accountID,
+            path:
+                "/Suggestions?userId=\(try userID(for: accountID))&MediaType=Video&Type=Movie,Series&Limit=\(limit)&Fields=\(homeItemFields)"
+        )
+        let payload = try jsonObject(data: response.data)
+        return payload.dictionaries("Items").map(
+            JellyfinHomeItem.init(payload:)
+        )
+    }
+
     func createPlaybackSession(
         accountID: UUID,
         itemID: String,
@@ -427,6 +513,79 @@ actor JellyfinClient: JellyfinClientProtocol {
             playSessionID: playSessionID,
             streamURL: streamURL,
             mediaSources: sources
+        )
+    }
+
+    func reportPlaybackStarted(
+        accountID: UUID,
+        session: JellyfinPlaybackSession,
+        positionSeconds: Double,
+        isPaused: Bool
+    ) async throws {
+        _ = try await authenticatedRequest(
+            accountID: accountID,
+            path: "/Sessions/Playing",
+            method: "POST",
+            body: playbackInfoBody(
+                session: session,
+                positionSeconds: positionSeconds,
+                isPaused: isPaused
+            )
+        )
+    }
+
+    func reportPlaybackProgress(
+        accountID: UUID,
+        session: JellyfinPlaybackSession,
+        positionSeconds: Double,
+        isPaused: Bool
+    ) async throws {
+        _ = try await authenticatedRequest(
+            accountID: accountID,
+            path: "/Sessions/Playing/Progress",
+            method: "POST",
+            body: playbackInfoBody(
+                session: session,
+                positionSeconds: positionSeconds,
+                isPaused: isPaused
+            )
+        )
+    }
+
+    func reportPlaybackStopped(
+        accountID: UUID,
+        session: JellyfinPlaybackSession,
+        positionSeconds: Double,
+        isPaused: Bool,
+        finished: Bool
+    ) async throws {
+        var body = playbackInfoBody(
+            session: session,
+            positionSeconds: positionSeconds,
+            isPaused: isPaused
+        )
+        body["Failed"] = false
+        _ = try await authenticatedRequest(
+            accountID: accountID,
+            path: "/Sessions/Playing/Stopped",
+            method: "POST",
+            body: body
+        )
+    }
+
+    func markPlayed(accountID: UUID, itemID: String) async throws {
+        _ = try await authenticatedRequest(
+            accountID: accountID,
+            path: "/UserPlayedItems/\(itemID)",
+            method: "POST"
+        )
+    }
+
+    func markUnplayed(accountID: UUID, itemID: String) async throws {
+        _ = try await authenticatedRequest(
+            accountID: accountID,
+            path: "/UserPlayedItems/\(itemID)",
+            method: "DELETE"
         )
     }
 
@@ -712,6 +871,63 @@ actor JellyfinClient: JellyfinClientProtocol {
         return components?.url ?? URL(
             string: "\(baseURL)/Videos/\(itemID)/stream"
         )!
+    }
+
+    private var homeItemFields: String {
+        [
+            "Overview",
+            "ProductionYear",
+            "CommunityRating",
+            "RunTimeTicks",
+            "UserData",
+            "ImageTags",
+            "BackdropImageTags",
+            "SeriesId",
+            "SeriesName",
+            "SeasonId",
+            "SeasonName",
+            "IndexNumber",
+            "ParentIndexNumber",
+            "DateCreated",
+        ]
+        .joined(separator: ",")
+    }
+
+    private func playbackInfoBody(
+        session: JellyfinPlaybackSession,
+        positionSeconds: Double,
+        isPaused: Bool
+    ) -> [String: Any] {
+        let mediaSource =
+            session.mediaSources.first(where: { $0.id == session.mediaSourceID }
+            )
+            ?? session.mediaSources.first
+
+        var body: [String: Any] = [
+            "CanSeek": true,
+            "IsPaused": isPaused,
+            "ItemId": session.itemID,
+            "PlayMethod": playbackMethod(for: mediaSource),
+            "PositionTicks": max(0, Int64(positionSeconds * 10_000_000.0)),
+        ]
+
+        if let mediaSourceID = session.mediaSourceID ?? mediaSource?.id {
+            body["MediaSourceId"] = mediaSourceID
+        }
+        if let playSessionID = session.playSessionID {
+            body["PlaySessionId"] = playSessionID
+        }
+
+        return body
+    }
+
+    private func playbackMethod(for mediaSource: JellyfinPlaybackMediaSource?)
+        -> String
+    {
+        if mediaSource?.directStreamPath?.nilIfBlank != nil {
+            return "DirectStream"
+        }
+        return "DirectPlay"
     }
 
     private func jsonObject(data: Data) throws -> [String: Any] {

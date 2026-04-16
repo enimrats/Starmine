@@ -1,6 +1,13 @@
 import Combine
 import Foundation
 
+private struct RemotePlaybackPulse: Equatable {
+    var loaded: Bool
+    var paused: Bool
+    var positionBucket: Int
+    var durationBucket: Int
+}
+
 @MainActor
 final class AppCoordinator: ObservableObject {
     @Published var errorState: AppErrorState?
@@ -49,6 +56,23 @@ final class AppCoordinator: ObservableObject {
         playback.onPreviousTrack = { [weak self] in
             self?.playPreviousEpisode()
         }
+
+        playback.$snapshot
+            .map { snapshot in
+                RemotePlaybackPulse(
+                    loaded: snapshot.loaded,
+                    paused: snapshot.paused,
+                    positionBucket: Int(snapshot.position.rounded(.down)),
+                    durationBucket: Int(snapshot.duration.rounded(.down))
+                )
+            }
+            .removeDuplicates()
+            .sink { [weak self] _ in
+                Task { [weak self] in
+                    await self?.handleRemotePlaybackPulse()
+                }
+            }
+            .store(in: &cancellables)
 
         Task { [weak self] in
             await self?.restoreJellyfinState()
@@ -135,6 +159,26 @@ final class AppCoordinator: ObservableObject {
         jellyfin.jellyfinPosterURL(for: season, width: width, height: height)
     }
 
+    func jellyfinPosterURL(
+        for homeItem: JellyfinHomeItem,
+        width: Int = 440,
+        height: Int = 660
+    ) -> URL? {
+        jellyfin.jellyfinPosterURL(for: homeItem, width: width, height: height)
+    }
+
+    func jellyfinBackdropURL(
+        for homeItem: JellyfinHomeItem,
+        width: Int = 1400,
+        height: Int = 700
+    ) -> URL? {
+        jellyfin.jellyfinBackdropURL(
+            for: homeItem,
+            width: width,
+            height: height
+        )
+    }
+
     func jellyfinEpisodeThumbnailURL(
         _ episode: JellyfinEpisode,
         width: Int = 480,
@@ -148,6 +192,9 @@ final class AppCoordinator: ObservableObject {
     }
 
     func openVideo(url: URL) {
+        finishRemotePlaybackIfNeeded(
+            finished: shouldTreatCurrentRemotePlaybackAsFinished()
+        )
         playback.openLocalVideo(url)
         jellyfin.clearRemoteNavigation()
 
@@ -214,6 +261,7 @@ final class AppCoordinator: ObservableObject {
     }
 
     func switchJellyfinAccount(_ accountID: UUID) {
+        guard jellyfin.selectedAccountID != accountID else { return }
         Task { [weak self] in
             guard let self else { return }
             do {
@@ -258,6 +306,17 @@ final class AppCoordinator: ObservableObject {
             guard let self else { return }
             do {
                 try await self.jellyfin.refreshLibrary()
+            } catch {
+                self.handleError(error)
+            }
+        }
+    }
+
+    func refreshJellyfinHome() {
+        Task { [weak self] in
+            guard let self else { return }
+            do {
+                try await self.jellyfin.refreshHome()
             } catch {
                 self.handleError(error)
             }
@@ -316,6 +375,71 @@ final class AppCoordinator: ObservableObject {
         }
     }
 
+    func playJellyfinHomeItem(_ item: JellyfinHomeItem) {
+        Task { [weak self] in
+            await self?.playJellyfinHomeItemAsync(item)
+        }
+    }
+
+    func openJellyfinHomeItemInLibrary(_ item: JellyfinHomeItem) {
+        Task { [weak self] in
+            guard let self else { return }
+            do {
+                try await self.jellyfin.focusLibraryContext(for: item)
+                self.syncJellyfinNavigation()
+            } catch {
+                self.handleError(error)
+            }
+        }
+    }
+
+    func setJellyfinHomeItemPlayedState(_ item: JellyfinHomeItem, played: Bool)
+    {
+        Task { [weak self] in
+            guard let self else { return }
+            do {
+                try await self.jellyfin.setPlayedState(
+                    itemID: item.id,
+                    played: played
+                )
+            } catch {
+                self.handleError(error)
+            }
+        }
+    }
+
+    func setJellyfinMediaItemPlayedState(
+        _ item: JellyfinMediaItem,
+        played: Bool
+    ) {
+        Task { [weak self] in
+            guard let self else { return }
+            do {
+                try await self.jellyfin.setPlayedState(
+                    itemID: item.id,
+                    played: played
+                )
+            } catch {
+                self.handleError(error)
+            }
+        }
+    }
+
+    func setJellyfinEpisodePlayedState(_ episode: JellyfinEpisode, played: Bool)
+    {
+        Task { [weak self] in
+            guard let self else { return }
+            do {
+                try await self.jellyfin.setPlayedState(
+                    itemID: episode.id,
+                    played: played
+                )
+            } catch {
+                self.handleError(error)
+            }
+        }
+    }
+
     func playPreviousEpisode() {
         guard let episode = jellyfin.previousRemoteEpisode else { return }
         playJellyfinEpisode(episode)
@@ -327,6 +451,9 @@ final class AppCoordinator: ObservableObject {
     }
 
     func handleWindowClosing() {
+        finishRemotePlaybackIfNeeded(
+            finished: shouldTreatCurrentRemotePlaybackAsFinished()
+        )
         playback.stopPlayback()
     }
 
@@ -405,6 +532,9 @@ final class AppCoordinator: ObservableObject {
 
     private func playJellyfinMediaItemAsync(_ item: JellyfinMediaItem) async {
         do {
+            await stopRemotePlaybackIfNeeded(
+                finished: shouldTreatCurrentRemotePlaybackAsFinished()
+            )
             let candidate = try await jellyfin.makePlaybackCandidate(for: item)
             playback.beginRemotePlayback(
                 session: candidate.session,
@@ -412,6 +542,11 @@ final class AppCoordinator: ObservableObject {
                 episodeLabel: candidate.episodeLabel,
                 collectionTitle: candidate.collectionTitle,
                 resumePosition: candidate.resumePosition
+            )
+            await jellyfin.beginPlaybackTracking(
+                candidate: candidate,
+                initialPosition: candidate.resumePosition ?? 0,
+                isPaused: false
             )
             danmaku.prepareSearch(
                 query: candidate.danmakuQuery,
@@ -431,6 +566,9 @@ final class AppCoordinator: ObservableObject {
 
     private func playJellyfinEpisodeAsync(_ episode: JellyfinEpisode) async {
         do {
+            await stopRemotePlaybackIfNeeded(
+                finished: shouldTreatCurrentRemotePlaybackAsFinished()
+            )
             let candidate = try await jellyfin.makePlaybackCandidate(
                 for: episode
             )
@@ -440,6 +578,45 @@ final class AppCoordinator: ObservableObject {
                 episodeLabel: candidate.episodeLabel,
                 collectionTitle: candidate.collectionTitle,
                 resumePosition: candidate.resumePosition
+            )
+            await jellyfin.beginPlaybackTracking(
+                candidate: candidate,
+                initialPosition: candidate.resumePosition ?? 0,
+                isPaused: false
+            )
+            danmaku.prepareSearch(
+                query: candidate.danmakuQuery,
+                inferredSeasonNumber: candidate.seasonNumber,
+                inferredSeasonEpisodeCount: candidate.seasonEpisodeCount,
+                inferredEpisodeNumber: candidate.episodeNumber,
+                remoteSeriesID: candidate.remoteSeriesID,
+                remoteSeasonID: candidate.remoteSeasonID,
+                remoteEpisodeID: candidate.remoteEpisodeID
+            )
+            syncJellyfinNavigation()
+            await searchAndAutoloadDanmaku()
+        } catch {
+            handleError(error)
+        }
+    }
+
+    private func playJellyfinHomeItemAsync(_ item: JellyfinHomeItem) async {
+        do {
+            await stopRemotePlaybackIfNeeded(
+                finished: shouldTreatCurrentRemotePlaybackAsFinished()
+            )
+            let candidate = try await jellyfin.makePlaybackCandidate(for: item)
+            playback.beginRemotePlayback(
+                session: candidate.session,
+                title: candidate.title,
+                episodeLabel: candidate.episodeLabel,
+                collectionTitle: candidate.collectionTitle,
+                resumePosition: candidate.resumePosition
+            )
+            await jellyfin.beginPlaybackTracking(
+                candidate: candidate,
+                initialPosition: candidate.resumePosition ?? 0,
+                isPaused: false
             )
             danmaku.prepareSearch(
                 query: candidate.danmakuQuery,
@@ -472,6 +649,73 @@ final class AppCoordinator: ObservableObject {
             previous: jellyfin.canPlayPreviousEpisode,
             next: jellyfin.canPlayNextEpisode
         )
+    }
+
+    private func handleRemotePlaybackPulse() async {
+        guard playback.isPlayingRemote else { return }
+
+        if playback.snapshot.loaded {
+            jellyfin.markActivePlaybackLoaded()
+        } else if jellyfin.hasLoadedActivePlayback {
+            await stopRemotePlaybackIfNeeded(
+                finished: shouldTreatCurrentRemotePlaybackAsFinished()
+            )
+            return
+        }
+
+        await jellyfin.reportActivePlaybackProgress(
+            positionSeconds: playback.timebase.resolvedPosition(at: Date()),
+            durationSeconds: max(
+                playback.snapshot.duration,
+                playback.timebase.duration
+            ),
+            isPaused: playback.snapshot.paused
+        )
+    }
+
+    private func finishRemotePlaybackIfNeeded(finished: Bool) {
+        guard playback.isPlayingRemote else { return }
+        let position = playback.timebase.resolvedPosition(at: Date())
+        let duration = max(
+            playback.snapshot.duration,
+            playback.timebase.duration
+        )
+        let paused = playback.snapshot.paused
+
+        Task { [weak self] in
+            await self?.jellyfin.finishPlaybackTracking(
+                positionSeconds: position,
+                durationSeconds: duration,
+                isPaused: paused,
+                finished: finished
+            )
+        }
+    }
+
+    private func stopRemotePlaybackIfNeeded(finished: Bool) async {
+        guard playback.isPlayingRemote else { return }
+        await jellyfin.finishPlaybackTracking(
+            positionSeconds: playback.timebase.resolvedPosition(at: Date()),
+            durationSeconds: max(
+                playback.snapshot.duration,
+                playback.timebase.duration
+            ),
+            isPaused: playback.snapshot.paused,
+            finished: finished
+        )
+    }
+
+    private func shouldTreatCurrentRemotePlaybackAsFinished() -> Bool {
+        guard playback.isPlayingRemote else { return false }
+
+        let duration = max(
+            playback.snapshot.duration,
+            playback.timebase.duration
+        )
+        guard duration > 0 else { return false }
+
+        let position = playback.timebase.resolvedPosition(at: Date())
+        return position >= max(duration - 30, duration * 0.92)
     }
 
     private func handleError(_ error: Error) {

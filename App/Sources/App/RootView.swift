@@ -145,7 +145,7 @@ struct RootView: View {
                 .onAppear {
                     guard !isIOSVideoFullscreen else { return }
                     StarmineiOSOrientationController
-                        .restoreDefaultOrientationBehavior()
+                    .restoreDefaultOrientationBehavior()
                 }
                 .onReceive(
                     NotificationCenter.default.publisher(
@@ -154,7 +154,7 @@ struct RootView: View {
                 ) { _ in
                     guard !isIOSVideoFullscreen else { return }
                     StarmineiOSOrientationController
-                        .restoreDefaultOrientationBehavior()
+                    .restoreDefaultOrientationBehavior()
                 }
             #endif
             .onReceive(
@@ -185,7 +185,9 @@ struct RootView: View {
                 selectedSubtitleTrackTitle = newValue
             }
             .onChange(of: jellyfin.selectedAccountID) { newValue in
-                guard let newValue = newValue, !hasActivePlayback else { return }
+                guard let newValue = newValue, !hasActivePlayback else {
+                    return
+                }
                 workspaceSection = .library(newValue)
                 #if !os(macOS)
                     mobileTab = .library
@@ -658,7 +660,8 @@ struct RootView: View {
             .background(Color.black)
             .allowsHitTesting(false)
 
-            if playbackDanmakuEnabled, surfaceSize.width > 0, surfaceSize.height > 0
+            if playbackDanmakuEnabled, surfaceSize.width > 0,
+                surfaceSize.height > 0
             {
                 danmakuOverlay(in: surfaceSize, metrics: danmakuMetrics)
                     .frame(width: surfaceSize.width, height: surfaceSize.height)
@@ -764,19 +767,114 @@ struct RootView: View {
         }
     }
 
-    
     private var homeScreenPlaceholder: some View {
-        VStack(spacing: 16) {
-            Image(systemName: "sparkles")
-                .font(.system(size: 64, weight: .regular))
-                .foregroundStyle(Palette.accent.opacity(0.8))
-            Text("欢迎使用 Starmine")
-                .font(.system(size: 24, weight: .bold, design: .rounded))
-            Text("播放状态跟踪与更多功能敬请期待。")
-                .font(.system(size: 15, weight: .medium, design: .rounded))
-                .foregroundStyle(Palette.ink.opacity(0.6))
+        HomeDashboardView(
+            coordinator: coordinator,
+            jellyfin: jellyfin,
+            playback: playback,
+            hasActivePlayback: hasActivePlayback,
+            currentPlaybackTitle: currentPlaybackTitle,
+            currentPlaybackEpisodeLabel: currentPlaybackEpisodeLabel,
+            prefersTouchLayout: prefersTouchHomeLayout,
+            onOpenFile: {
+                importerPresented = true
+            },
+            onShowLibrary: {
+                showHomeLibrary()
+            },
+            onShowPlayer: {
+                workspaceSection = .player
+            },
+            onRefresh: {
+                coordinator.refreshJellyfinHome()
+            },
+            onSelectHomeItem: { item in
+                selectHomeItem(item)
+            },
+            onOpenHomeItemInLibrary: { item in
+                openHomeItemInLibrary(item)
+            },
+            onSetHomeItemPlayedState: { item, played in
+                setHomeItemPlayedState(item, played: played)
+            }
+        )
+        .task(id: jellyfin.selectedAccountID) {
+            coordinator.refreshJellyfinHome()
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    private var prefersTouchHomeLayout: Bool {
+        #if os(macOS)
+            false
+        #else
+            true
+        #endif
+    }
+
+    private func showHomeLibrary() {
+        guard let activeAccountID = coordinator.activeJellyfinAccount?.id else {
+            return
+        }
+        workspaceSection = .library(activeAccountID)
+    }
+
+    private func selectHomeItem(_ item: JellyfinHomeItem) {
+        if item.kind.isPlayable {
+            coordinator.playJellyfinHomeItem(item)
+            workspaceSection = .player
+            return
+        }
+
+        guard let activeAccountID = coordinator.activeJellyfinAccount?.id else {
+            return
+        }
+
+        jellyfinLibrarySearch = ""
+
+        let libraryItem: JellyfinMediaItem
+        switch item.kind {
+        case .series:
+            libraryItem = JellyfinMediaItem(
+                payload: [
+                    "Id": item.id,
+                    "Name": item.name,
+                    "Type": "Series",
+                    "Overview": item.overview as Any,
+                    "ProductionYear": item.productionYear as Any,
+                    "CommunityRating": item.communityRating as Any,
+                    "RunTimeTicks": item.runTimeTicks as Any,
+                ].compactMapValues { $0 }
+            )
+        default:
+            if let seriesID = item.seriesID {
+                libraryItem = JellyfinMediaItem(
+                    payload: [
+                        "Id": seriesID,
+                        "Name": item.seriesName ?? item.name,
+                        "Type": "Series",
+                    ]
+                )
+            } else {
+                libraryItem = JellyfinMediaItem(homeItem: item)
+            }
+        }
+
+        workspaceSection = .library(activeAccountID)
+        coordinator.selectJellyfinItem(libraryItem)
+    }
+
+    private func openHomeItemInLibrary(_ item: JellyfinHomeItem) {
+        guard let activeAccountID = coordinator.activeJellyfinAccount?.id else {
+            return
+        }
+        jellyfinLibrarySearch = ""
+        workspaceSection = .library(activeAccountID)
+        coordinator.openJellyfinHomeItemInLibrary(item)
+    }
+
+    private func setHomeItemPlayedState(_ item: JellyfinHomeItem, played: Bool)
+    {
+        coordinator.setJellyfinHomeItemPlayedState(item, played: played)
     }
 
     private var workspaceHeaderTitle: String {
@@ -826,8 +924,6 @@ struct RootView: View {
 
             Spacer(minLength: 12)
 
-            
-
             if let account = coordinator.activeJellyfinAccount {
                 HeaderCapsule(
                     title: account.username,
@@ -855,7 +951,15 @@ struct RootView: View {
 
     private var workspaceSummaryText: String {
         switch workspaceSection {
-        case .home, .files:
+        case .home:
+            if hasActivePlayback {
+                return currentPlaybackTitle
+            }
+            if let account = coordinator.activeJellyfinAccount {
+                return account.displayTitle
+            }
+            return ""
+        case .files:
             return ""
         case .library:
             if let item = coordinator.selectedJellyfinItem {
@@ -1781,6 +1885,841 @@ struct RootView: View {
             }
         }
     #endif
+}
+
+private struct HomeDashboardMetrics {
+    let containerWidth: CGFloat
+    let prefersTouchLayout: Bool
+
+    var isCompact: Bool {
+        prefersTouchLayout || containerWidth < 860
+    }
+
+    var outerPadding: CGFloat { isCompact ? 16 : 24 }
+    var verticalPadding: CGFloat { isCompact ? 16 : 24 }
+    var sectionSpacing: CGFloat { isCompact ? 18 : 24 }
+    var heroCornerRadius: CGFloat { isCompact ? 26 : 30 }
+    var heroPosterWidth: CGFloat { isCompact ? 104 : 126 }
+    var heroPosterHeight: CGFloat { isCompact ? 156 : 186 }
+    var shelfCardWidth: CGFloat {
+        isCompact ? min(max(containerWidth - 48, 220), 254) : 286
+    }
+    var shelfArtworkHeight: CGFloat { isCompact ? 148 : 172 }
+}
+
+private enum HomeShelfKind {
+    case resume
+    case recent
+    case nextUp
+    case recommended
+
+    var title: String {
+        switch self {
+        case .resume: return "继续观看"
+        case .recent: return "最近观看"
+        case .nextUp: return "下一集"
+        case .recommended: return "推荐"
+        }
+    }
+
+    func actionTitle(for item: JellyfinHomeItem) -> String {
+        switch self {
+        case .resume:
+            return item.kind.isPlayable ? "继续" : "查看"
+        case .recent:
+            return item.kind.isPlayable ? "重播" : "查看"
+        case .nextUp:
+            return item.kind.isPlayable ? "播放" : "查看"
+        case .recommended:
+            return item.kind.isPlayable ? "播放" : "查看"
+        }
+    }
+}
+
+private struct HomeDashboardView: View {
+    @ObservedObject var coordinator: AppCoordinator
+    @ObservedObject var jellyfin: JellyfinStore
+    @ObservedObject var playback: PlaybackStore
+    let hasActivePlayback: Bool
+    let currentPlaybackTitle: String
+    let currentPlaybackEpisodeLabel: String
+    let prefersTouchLayout: Bool
+    let onOpenFile: () -> Void
+    let onShowLibrary: () -> Void
+    let onShowPlayer: () -> Void
+    let onRefresh: () -> Void
+    let onSelectHomeItem: (JellyfinHomeItem) -> Void
+    let onOpenHomeItemInLibrary: (JellyfinHomeItem) -> Void
+    let onSetHomeItemPlayedState: (JellyfinHomeItem, Bool) -> Void
+
+    private var featuredItem: JellyfinHomeItem? {
+        jellyfin.resumeItems.first
+            ?? jellyfin.nextUpItems.first
+            ?? jellyfin.recommendedItems.first
+            ?? jellyfin.recentItems.first
+    }
+
+    var body: some View {
+        GeometryReader { proxy in
+            let metrics = HomeDashboardMetrics(
+                containerWidth: max(320, proxy.size.width),
+                prefersTouchLayout: prefersTouchLayout
+            )
+
+            ScrollView(showsIndicators: false) {
+                VStack(alignment: .leading, spacing: metrics.sectionSpacing) {
+                    hero(metrics: metrics)
+
+                    if !jellyfin.resumeItems.isEmpty {
+                        shelf(
+                            title: HomeShelfKind.resume.title,
+                            items: jellyfin.resumeItems,
+                            kind: .resume,
+                            metrics: metrics
+                        )
+                    }
+
+                    if !jellyfin.recentItems.isEmpty {
+                        shelf(
+                            title: HomeShelfKind.recent.title,
+                            items: jellyfin.recentItems,
+                            kind: .recent,
+                            metrics: metrics
+                        )
+                    }
+
+                    if !jellyfin.nextUpItems.isEmpty {
+                        shelf(
+                            title: HomeShelfKind.nextUp.title,
+                            items: jellyfin.nextUpItems,
+                            kind: .nextUp,
+                            metrics: metrics
+                        )
+                    }
+
+                    if !jellyfin.recommendedItems.isEmpty {
+                        shelf(
+                            title: HomeShelfKind.recommended.title,
+                            items: jellyfin.recommendedItems,
+                            kind: .recommended,
+                            metrics: metrics
+                        )
+                    }
+                }
+                .padding(.horizontal, metrics.outerPadding)
+                .padding(.top, metrics.verticalPadding)
+                .padding(.bottom, metrics.verticalPadding + 12)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .refreshable {
+                onRefresh()
+            }
+        }
+    }
+
+    private func hero(metrics: HomeDashboardMetrics) -> some View {
+        let heroTitle = resolvedHeroTitle
+        let heroSubtitle = resolvedHeroSubtitle
+        let featureBackdrop = featuredItem.flatMap {
+            coordinator.jellyfinBackdropURL(
+                for: $0,
+                width: 1600,
+                height: 900
+            )
+        }
+        let featurePoster = featuredItem.flatMap {
+            coordinator.jellyfinPosterURL(
+                for: $0,
+                width: 360,
+                height: 540
+            )
+        }
+
+        return ZStack(alignment: .topLeading) {
+            RoundedRectangle(
+                cornerRadius: metrics.heroCornerRadius,
+                style: .continuous
+            )
+            .fill(
+                LinearGradient(
+                    colors: [
+                        Color(red: 0.24, green: 0.18, blue: 0.15),
+                        Color(red: 0.45, green: 0.24, blue: 0.14),
+                        Color(red: 0.78, green: 0.31, blue: 0.12),
+                    ],
+                    startPoint: .topLeading,
+                    endPoint: .bottomTrailing
+                )
+            )
+
+            if let featureBackdrop {
+                HStack(spacing: 0) {
+                    Spacer(minLength: 0)
+                    JellyfinArtworkView(
+                        url: featureBackdrop,
+                        placeholderSystemName: "sparkles.tv.fill",
+                        cornerRadius: metrics.heroCornerRadius
+                    )
+                    .frame(width: min(metrics.containerWidth * 0.48, 420))
+                    .mask(
+                        LinearGradient(
+                            colors: [.clear, .black.opacity(0.34), .black],
+                            startPoint: .leading,
+                            endPoint: .trailing
+                        )
+                    )
+                    .opacity(0.78)
+                }
+            }
+
+            LinearGradient(
+                colors: [
+                    Color.black.opacity(0.08),
+                    Color.black.opacity(0.18),
+                    Color.black.opacity(0.54),
+                ],
+                startPoint: .top,
+                endPoint: .bottom
+            )
+            .clipShape(
+                RoundedRectangle(
+                    cornerRadius: metrics.heroCornerRadius,
+                    style: .continuous
+                )
+            )
+
+            Group {
+                if metrics.isCompact {
+                    VStack(alignment: .leading, spacing: 18) {
+                        heroTopRow(metrics: metrics)
+                        heroCopy(title: heroTitle, subtitle: heroSubtitle)
+                        if let featuredItem {
+                            heroPoster(
+                                featuredItem: featuredItem,
+                                posterURL: featurePoster,
+                                metrics: metrics
+                            )
+                        }
+                        heroStatus(metrics: metrics)
+                        heroActions(metrics: metrics)
+                    }
+                } else {
+                    HStack(alignment: .bottom, spacing: 24) {
+                        VStack(alignment: .leading, spacing: 18) {
+                            heroTopRow(metrics: metrics)
+                            heroCopy(title: heroTitle, subtitle: heroSubtitle)
+                            heroStatus(metrics: metrics)
+                            heroActions(metrics: metrics)
+                        }
+                        Spacer(minLength: 12)
+                        if let featuredItem {
+                            heroPoster(
+                                featuredItem: featuredItem,
+                                posterURL: featurePoster,
+                                metrics: metrics
+                            )
+                        }
+                    }
+                }
+            }
+            .padding(metrics.isCompact ? 18 : 28)
+        }
+        .overlay {
+            RoundedRectangle(
+                cornerRadius: metrics.heroCornerRadius,
+                style: .continuous
+            )
+            .strokeBorder(.white.opacity(0.16), lineWidth: 1)
+        }
+        .shadow(color: .black.opacity(0.08), radius: 18, x: 0, y: 10)
+    }
+
+    private func heroTopRow(metrics: HomeDashboardMetrics) -> some View {
+        HStack(alignment: .top, spacing: 12) {
+            if metrics.isCompact {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 10) {
+                        heroPills
+                    }
+                    .padding(.horizontal, 1)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            } else {
+                HStack(spacing: 10) {
+                    heroPills
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+
+            heroRefreshButton
+        }
+    }
+
+    private func heroCopy(title: String, subtitle: String?) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text(title)
+                .font(.system(size: 30, weight: .bold, design: .rounded))
+                .foregroundStyle(.white)
+                .lineLimit(2)
+
+            if let subtitle = subtitle?.nilIfBlank {
+                Text(subtitle)
+                    .font(
+                        .system(size: 15, weight: .semibold, design: .rounded)
+                    )
+                    .foregroundStyle(.white.opacity(0.84))
+                    .lineLimit(2)
+            }
+        }
+    }
+
+    private func heroPoster(
+        featuredItem: JellyfinHomeItem,
+        posterURL: URL?,
+        metrics: HomeDashboardMetrics
+    ) -> some View {
+        JellyfinArtworkView(
+            url: posterURL,
+            placeholderSystemName: featuredItem.kind == .series
+                ? "tv.inset.filled" : "film.fill",
+            cornerRadius: 24
+        )
+        .frame(
+            width: metrics.heroPosterWidth,
+            height: metrics.heroPosterHeight
+        )
+        .shadow(color: .black.opacity(0.24), radius: 14, x: 0, y: 10)
+    }
+
+    @ViewBuilder
+    private func heroStatus(metrics: HomeDashboardMetrics) -> some View {
+        if hasActivePlayback {
+            TimelineView(.periodic(from: .now, by: 1)) { context in
+                let resolvedPosition = playback.timebase.resolvedPosition(
+                    at: context.date
+                )
+                let duration = max(
+                    playback.snapshot.duration,
+                    playback.timebase.duration
+                )
+                let progress =
+                    duration > 0
+                    ? max(0, min(1, resolvedPosition / duration)) : 0
+
+                VStack(alignment: .leading, spacing: 12) {
+                    HomeProgressBar(progress: progress)
+                        .frame(height: 5)
+
+                    HStack(spacing: 12) {
+                        Text(timeText(resolvedPosition))
+                            .font(
+                                .system(
+                                    size: 13,
+                                    weight: .semibold,
+                                    design: .rounded
+                                )
+                            )
+                            .foregroundStyle(.white.opacity(0.9))
+                            .monospacedDigit()
+
+                        Text("/")
+                            .foregroundStyle(.white.opacity(0.4))
+
+                        Text(timeText(duration))
+                            .font(
+                                .system(
+                                    size: 13,
+                                    weight: .semibold,
+                                    design: .rounded
+                                )
+                            )
+                            .foregroundStyle(.white.opacity(0.72))
+                            .monospacedDigit()
+                    }
+                }
+            }
+        } else if let featuredItem {
+            VStack(alignment: .leading, spacing: 10) {
+                HStack(spacing: 10) {
+                    Text(featuredItem.detailTitle)
+                        .font(
+                            .system(
+                                size: 13,
+                                weight: .semibold,
+                                design: .rounded
+                            )
+                        )
+                        .foregroundStyle(.white.opacity(0.88))
+                        .lineLimit(1)
+
+                    if let runtime = runtimeText(
+                        fromTicks: featuredItem.runTimeTicks
+                    ) {
+                        Text(runtime)
+                            .font(
+                                .system(
+                                    size: 13,
+                                    weight: .medium,
+                                    design: .rounded
+                                )
+                            )
+                            .foregroundStyle(.white.opacity(0.68))
+                    }
+                }
+
+                if featuredItem.progressFraction > 0 {
+                    HomeProgressBar(progress: featuredItem.progressFraction)
+                        .frame(height: 5)
+                }
+            }
+        }
+    }
+
+    private func heroActions(metrics: HomeDashboardMetrics) -> some View {
+        Group {
+            if metrics.isCompact {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 12) {
+                        heroActionButtons
+                    }
+                    .padding(.horizontal, 1)
+                }
+            } else {
+                HStack(spacing: 12) {
+                    heroActionButtons
+                }
+            }
+        }
+        .labelStyle(.titleAndIcon)
+    }
+
+    @ViewBuilder
+    private var heroPills: some View {
+        if hasActivePlayback {
+            PillLabel(text: playback.isPlayingRemote ? "Jellyfin" : "本地")
+            PillLabel(text: playback.snapshot.paused ? "已暂停" : "播放中")
+            if jellyfin.isSyncingPlayback && playback.isPlayingRemote {
+                StatPill(text: "已同步", emphasized: true)
+            }
+        } else if let account = coordinator.activeJellyfinAccount {
+            PillLabel(text: account.serverName)
+            if let route = coordinator.activeJellyfinRoute?.name {
+                PillLabel(text: route)
+            }
+        } else {
+            PillLabel(text: "本地文件")
+        }
+    }
+
+    private var heroRefreshButton: some View {
+        Button {
+            onRefresh()
+        } label: {
+            Group {
+                if jellyfin.isRefreshingHome {
+                    ProgressView()
+                        .tint(.white)
+                } else {
+                    Image(systemName: "arrow.clockwise")
+                        .font(.system(size: 14, weight: .bold))
+                }
+            }
+            .frame(width: 34, height: 34)
+            .background(.white.opacity(0.14))
+            .clipShape(Circle())
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(.white)
+    }
+
+    @ViewBuilder
+    private var heroActionButtons: some View {
+        if hasActivePlayback {
+            Button {
+                onShowPlayer()
+            } label: {
+                Label("播放器", systemImage: "play.rectangle.fill")
+            }
+            .buttonStyle(.borderedProminent)
+            .tint(Palette.accentDeep)
+
+            if coordinator.activeJellyfinAccount != nil {
+                Button {
+                    onShowLibrary()
+                } label: {
+                    Label("媒体库", systemImage: "rectangle.stack.fill")
+                }
+                .buttonStyle(.bordered)
+                .tint(.white)
+            }
+        } else if let featuredItem {
+            Button {
+                onSelectHomeItem(featuredItem)
+            } label: {
+                Label(
+                    featuredItem.kind.isPlayable ? "继续" : "查看",
+                    systemImage: featuredItem.kind.isPlayable
+                        ? "play.fill" : "rectangle.stack.fill"
+                )
+            }
+            .buttonStyle(.borderedProminent)
+            .tint(Palette.accentDeep)
+
+            if coordinator.activeJellyfinAccount != nil {
+                Button {
+                    onOpenHomeItemInLibrary(featuredItem)
+                } label: {
+                    Label("定位到媒体库", systemImage: "rectangle.stack.fill")
+                }
+                .buttonStyle(.bordered)
+                .tint(.white)
+
+                Button {
+                    onSetHomeItemPlayedState(
+                        featuredItem,
+                        !featuredItem.isPlayed
+                    )
+                } label: {
+                    Label(
+                        featuredItem.isPlayed ? "标为未看" : "标为已看",
+                        systemImage: featuredItem.isPlayed
+                            ? "arrow.uturn.backward.circle"
+                            : "checkmark.circle.fill"
+                    )
+                }
+                .buttonStyle(.bordered)
+                .tint(.white)
+                .disabled(jellyfin.isUpdatingPlayedState(for: featuredItem.id))
+
+                Button {
+                    onShowLibrary()
+                } label: {
+                    Label("媒体库", systemImage: "rectangle.stack.fill")
+                }
+                .buttonStyle(.bordered)
+                .tint(.white)
+            }
+        }
+
+        Button {
+            onOpenFile()
+        } label: {
+            Label("打开文件", systemImage: "folder.badge.plus")
+        }
+        .buttonStyle(.bordered)
+        .tint(.white)
+    }
+
+    private func shelf(
+        title: String,
+        items: [JellyfinHomeItem],
+        kind: HomeShelfKind,
+        metrics: HomeDashboardMetrics
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack {
+                SectionHeader(
+                    title: title,
+                    systemImage: "sparkles.rectangle.stack"
+                )
+                Spacer(minLength: 12)
+                Text("\(items.count)")
+                    .font(.system(size: 12, weight: .bold, design: .rounded))
+                    .foregroundStyle(Palette.ink.opacity(0.45))
+            }
+
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(alignment: .top, spacing: 16) {
+                    ForEach(items) { item in
+                        VStack(alignment: .leading, spacing: 12) {
+                            ZStack(alignment: .bottomLeading) {
+                                JellyfinArtworkView(
+                                    url: coordinator.jellyfinPosterURL(
+                                        for: item,
+                                        width: 420,
+                                        height: 630
+                                    ),
+                                    placeholderSystemName: item.kind == .series
+                                        ? "tv.inset.filled" : "film.fill",
+                                    cornerRadius: 24
+                                )
+                                .frame(
+                                    width: metrics.shelfCardWidth,
+                                    height: metrics.shelfArtworkHeight
+                                )
+
+                                LinearGradient(
+                                    colors: [
+                                        .clear,
+                                        Color.black.opacity(0.1),
+                                        Color.black.opacity(0.62),
+                                    ],
+                                    startPoint: .top,
+                                    endPoint: .bottom
+                                )
+                                .clipShape(
+                                    RoundedRectangle(
+                                        cornerRadius: 24,
+                                        style: .continuous
+                                    )
+                                )
+
+                                VStack(alignment: .leading, spacing: 8) {
+                                    HStack {
+                                        Text(item.kind.displayName)
+                                            .font(
+                                                .system(
+                                                    size: 11,
+                                                    weight: .bold,
+                                                    design: .rounded
+                                                )
+                                            )
+                                            .foregroundStyle(.white)
+                                            .padding(.horizontal, 10)
+                                            .padding(.vertical, 6)
+                                            .background(
+                                                Capsule(style: .continuous)
+                                                    .fill(
+                                                        Color.black.opacity(
+                                                            0.42
+                                                        )
+                                                    )
+                                            )
+
+                                        Spacer(minLength: 8)
+
+                                        HStack(spacing: 6) {
+                                            if coordinator.activeJellyfinAccount
+                                                != nil
+                                            {
+                                                homeOverlayIconButton(
+                                                    systemName:
+                                                        "rectangle.stack.fill"
+                                                ) {
+                                                    onOpenHomeItemInLibrary(
+                                                        item
+                                                    )
+                                                }
+
+                                                homeOverlayIconButton(
+                                                    systemName: item.isPlayed
+                                                        ? "arrow.uturn.backward.circle.fill"
+                                                        : "checkmark.circle.fill",
+                                                    highlighted: item.isPlayed,
+                                                    showsProgress:
+                                                        jellyfin
+                                                        .isUpdatingPlayedState(
+                                                            for: item.id
+                                                        )
+                                                ) {
+                                                    onSetHomeItemPlayedState(
+                                                        item,
+                                                        !item.isPlayed
+                                                    )
+                                                }
+                                            }
+
+                                            Text(kind.actionTitle(for: item))
+                                                .font(
+                                                    .system(
+                                                        size: 11,
+                                                        weight: .bold,
+                                                        design: .rounded
+                                                    )
+                                                )
+                                                .foregroundStyle(.white)
+                                                .padding(.horizontal, 10)
+                                                .padding(.vertical, 6)
+                                                .background(
+                                                    Capsule(style: .continuous)
+                                                        .fill(
+                                                            Palette.accentDeep
+                                                                .opacity(0.92)
+                                                        )
+                                                )
+                                        }
+                                    }
+
+                                    Spacer(minLength: 0)
+
+                                    if item.progressFraction > 0 {
+                                        HomeProgressBar(
+                                            progress: item.progressFraction
+                                        )
+                                        .frame(height: 4)
+                                    }
+                                }
+                                .padding(12)
+                            }
+
+                            VStack(alignment: .leading, spacing: 6) {
+                                Text(item.displayTitle)
+                                    .font(
+                                        .system(
+                                            size: 16,
+                                            weight: .bold,
+                                            design: .rounded
+                                        )
+                                    )
+                                    .foregroundStyle(Palette.ink)
+                                    .lineLimit(2)
+
+                                Text(item.detailTitle)
+                                    .font(
+                                        .system(
+                                            size: 12,
+                                            weight: .semibold,
+                                            design: .rounded
+                                        )
+                                    )
+                                    .foregroundStyle(Palette.ink.opacity(0.58))
+                                    .lineLimit(2)
+
+                                if let overview = item.overview?.nilIfBlank {
+                                    Text(overview)
+                                        .font(
+                                            .system(
+                                                size: 12,
+                                                weight: .medium,
+                                                design: .rounded
+                                            )
+                                        )
+                                        .foregroundStyle(
+                                            Palette.ink.opacity(0.44)
+                                        )
+                                        .lineLimit(2)
+                                }
+                            }
+                        }
+                        .frame(
+                            width: metrics.shelfCardWidth,
+                            alignment: .leading
+                        )
+                        .padding(14)
+                        .panelStyle(cornerRadius: 28)
+                        .contentShape(
+                            RoundedRectangle(
+                                cornerRadius: 28,
+                                style: .continuous
+                            )
+                        )
+                        .onTapGesture {
+                            onSelectHomeItem(item)
+                        }
+                    }
+                }
+                .padding(.vertical, 2)
+            }
+        }
+    }
+
+    private var resolvedHeroTitle: String {
+        if hasActivePlayback {
+            return currentPlaybackTitle
+        }
+        if let featuredItem {
+            return featuredItem.displayTitle
+        }
+        if let account = coordinator.activeJellyfinAccount {
+            return account.displayTitle
+        }
+        return "Starmine"
+    }
+
+    private var resolvedHeroSubtitle: String? {
+        if hasActivePlayback {
+            return currentPlaybackEpisodeLabel.nilIfBlank
+                ?? (playback.isPlayingRemote ? "Jellyfin" : "本地文件")
+        }
+        if let featuredItem {
+            return featuredItem.detailTitle
+        }
+        if let route = coordinator.activeJellyfinRoute?.name {
+            return route
+        }
+        return nil
+    }
+
+    private func runtimeText(fromTicks ticks: Double?) -> String? {
+        guard let ticks, ticks > 0 else { return nil }
+        let totalMinutes = Int((ticks / 10_000_000.0 / 60.0).rounded())
+        if totalMinutes >= 60 {
+            return "\(totalMinutes / 60) 小时 \(totalMinutes % 60) 分钟"
+        }
+        return "\(totalMinutes) 分钟"
+    }
+
+    private func timeText(_ seconds: Double) -> String {
+        let totalSeconds = max(0, Int(seconds.rounded()))
+        let hours = totalSeconds / 3600
+        let minutes = (totalSeconds % 3600) / 60
+        let remainingSeconds = totalSeconds % 60
+
+        if hours > 0 {
+            return String(
+                format: "%d:%02d:%02d",
+                hours,
+                minutes,
+                remainingSeconds
+            )
+        }
+
+        return String(format: "%02d:%02d", minutes, remainingSeconds)
+    }
+
+    private func homeOverlayIconButton(
+        systemName: String,
+        highlighted: Bool = false,
+        showsProgress: Bool = false,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            Group {
+                if showsProgress {
+                    ProgressView()
+                        .tint(.white)
+                } else {
+                    Image(systemName: systemName)
+                        .font(.system(size: 11, weight: .bold))
+                        .foregroundStyle(.white)
+                }
+            }
+            .frame(width: 30, height: 30)
+            .background(
+                Circle()
+                    .fill(
+                        highlighted
+                            ? Palette.accentDeep.opacity(0.96)
+                            : Color.black.opacity(0.42)
+                    )
+            )
+        }
+        .buttonStyle(.plain)
+        .disabled(showsProgress)
+    }
+}
+
+private struct HomeProgressBar: View {
+    let progress: Double
+
+    var body: some View {
+        GeometryReader { proxy in
+            let resolvedProgress = max(0, min(1, progress))
+
+            Capsule(style: .continuous)
+                .fill(.white.opacity(0.18))
+                .overlay(alignment: .leading) {
+                    Capsule(style: .continuous)
+                        .fill(Palette.accent)
+                        .frame(
+                            width: max(
+                                8,
+                                proxy.size.width * resolvedProgress
+                            )
+                        )
+                }
+        }
+    }
 }
 
 private struct PlaybackSurfaceState: Equatable {

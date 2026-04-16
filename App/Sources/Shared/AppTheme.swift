@@ -71,6 +71,8 @@ struct PillLabel: View {
         Text(text)
             .font(.system(size: 12, weight: .semibold, design: .rounded))
             .foregroundStyle(.white)
+            .lineLimit(1)
+            .fixedSize(horizontal: true, vertical: false)
             .padding(.horizontal, 10)
             .padding(.vertical, 7)
             .background(
@@ -88,6 +90,8 @@ struct StatPill: View {
         Text(text)
             .font(.system(size: 12, weight: .bold, design: .rounded))
             .foregroundStyle(.white.opacity(emphasized ? 0.98 : 0.9))
+            .lineLimit(1)
+            .fixedSize(horizontal: true, vertical: false)
             .padding(.horizontal, 12)
             .padding(.vertical, 7)
             .background(

@@ -36,46 +36,84 @@ struct LibraryWorkspaceView: View {
     let hasActivePlayback: Bool
     @Binding var workspaceSection: WorkspaceSection
     @Binding var jellyfinLibrarySearch: String
+    @State private var transientHighlightedEpisodeID: String?
+    @State private var clearEpisodeHighlightTask: Task<Void, Never>?
     var showsInlineSelectionToolbar = false
     var prefersTouchLayout = false
 
     var body: some View {
-        GeometryReader { proxy in
-            let metrics = LibraryLayoutMetrics(
-                containerWidth: max(320, proxy.size.width),
-                prefersTouchLayout: prefersTouchLayout
-            )
+        ScrollViewReader { scrollProxy in
+            GeometryReader { proxy in
+                let metrics = LibraryLayoutMetrics(
+                    containerWidth: max(320, proxy.size.width),
+                    prefersTouchLayout: prefersTouchLayout
+                )
 
-            Group {
-                if coordinator.activeJellyfinAccount == nil {
-                    disconnectedState(metrics)
-                } else {
-                    ScrollView(showsIndicators: false) {
-                        VStack(alignment: .leading, spacing: metrics.sectionSpacing) {
-                            if let item = coordinator.selectedJellyfinItem {
-                                selectedItemShowcase(item, metrics: metrics)
-                                if item.kind.isSeriesLike {
-                                    libraryInspectorPanel(metrics: metrics)
+                Group {
+                    if coordinator.activeJellyfinAccount == nil {
+                        disconnectedState(metrics)
+                    } else {
+                        ScrollView(showsIndicators: false) {
+                            VStack(
+                                alignment: .leading,
+                                spacing: metrics.sectionSpacing
+                            ) {
+                                if let item = coordinator.selectedJellyfinItem {
+                                    selectedItemShowcase(item, metrics: metrics)
+                                        .id(librarySelectedItemID)
+                                    if item.kind.isSeriesLike {
+                                        libraryInspectorPanel(metrics: metrics)
+                                            .id(libraryInspectorID)
+                                    }
+                                } else {
+                                    libraryShelf(metrics: metrics)
+                                    libraryExplorerContent(metrics: metrics)
                                 }
-                            } else {
-                                libraryShelf(metrics: metrics)
-                                libraryExplorerContent(metrics: metrics)
                             }
+                            .padding(.bottom, metrics.isCompact ? 24 : 8)
                         }
-                        .padding(.bottom, metrics.isCompact ? 24 : 8)
                     }
                 }
+                .frame(
+                    maxWidth: .infinity,
+                    maxHeight: .infinity,
+                    alignment: .top
+                )
+                .onAppear {
+                    scrollToFocusedLibraryContext(
+                        with: scrollProxy,
+                        animated: false
+                    )
+                    refreshTransientEpisodeHighlight(
+                        for: jellyfin.selectedEpisodeID
+                    )
+                }
+                .onChange(of: libraryVerticalFocusToken) { _ in
+                    scrollToFocusedLibraryContext(
+                        with: scrollProxy,
+                        animated: true
+                    )
+                }
+                .onChange(of: jellyfin.selectedEpisodeID) { newValue in
+                    refreshTransientEpisodeHighlight(for: newValue)
+                }
+                .onDisappear {
+                    clearEpisodeHighlightTask?.cancel()
+                    clearEpisodeHighlightTask = nil
+                }
             }
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         }
     }
 
-    private func disconnectedState(_ metrics: LibraryLayoutMetrics) -> some View {
+    private func disconnectedState(_ metrics: LibraryLayoutMetrics) -> some View
+    {
         VStack(spacing: 18) {
             RoundedRectangle(cornerRadius: 28, style: .continuous)
                 .fill(
                     LinearGradient(
-                        colors: [Palette.selection, Palette.accent.opacity(0.7)],
+                        colors: [
+                            Palette.selection, Palette.accent.opacity(0.7),
+                        ],
                         startPoint: .topLeading,
                         endPoint: .bottomTrailing
                     )
@@ -226,7 +264,11 @@ struct LibraryWorkspaceView: View {
                     VStack(alignment: .leading, spacing: 18) {
                         HStack {
                             Spacer(minLength: 0)
-                            posterArtwork(for: selectedItem, url: posterURL, metrics: metrics)
+                            posterArtwork(
+                                for: selectedItem,
+                                url: posterURL,
+                                metrics: metrics
+                            )
                             Spacer(minLength: 0)
                         }
 
@@ -242,7 +284,11 @@ struct LibraryWorkspaceView: View {
                     }
                 } else {
                     HStack(alignment: .bottom, spacing: 24) {
-                        posterArtwork(for: selectedItem, url: posterURL, metrics: metrics)
+                        posterArtwork(
+                            for: selectedItem,
+                            url: posterURL,
+                            metrics: metrics
+                        )
 
                         VStack(alignment: .leading, spacing: 14) {
                             heroCopy(
@@ -253,7 +299,10 @@ struct LibraryWorkspaceView: View {
                                 metrics: metrics
                             )
 
-                            heroActionButtons(for: selectedItem, metrics: metrics)
+                            heroActionButtons(
+                                for: selectedItem,
+                                metrics: metrics
+                            )
                         }
 
                         Spacer(minLength: 0)
@@ -384,6 +433,28 @@ struct LibraryWorkspaceView: View {
                     .frame(maxWidth: .infinity)
                 }
 
+                if selectedItem.kind.isPlayable {
+                    Button {
+                        coordinator.setJellyfinMediaItemPlayedState(
+                            selectedItem,
+                            played: !selectedItem.isPlayed
+                        )
+                    } label: {
+                        Label(
+                            selectedItem.isPlayed ? "标为未看" : "标为已看",
+                            systemImage: selectedItem.isPlayed
+                                ? "arrow.uturn.backward.circle.fill"
+                                : "checkmark.circle.fill"
+                        )
+                        .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(.bordered)
+                    .tint(.white)
+                    .disabled(
+                        jellyfin.isUpdatingPlayedState(for: selectedItem.id)
+                    )
+                }
+
                 Button {
                     coordinator.refreshJellyfinLibrary()
                 } label: {
@@ -418,6 +489,27 @@ struct LibraryWorkspaceView: View {
                     .tint(Palette.accent)
                 }
 
+                if selectedItem.kind.isPlayable {
+                    Button {
+                        coordinator.setJellyfinMediaItemPlayedState(
+                            selectedItem,
+                            played: !selectedItem.isPlayed
+                        )
+                    } label: {
+                        Label(
+                            selectedItem.isPlayed ? "标为未看" : "标为已看",
+                            systemImage: selectedItem.isPlayed
+                                ? "arrow.uturn.backward.circle.fill"
+                                : "checkmark.circle.fill"
+                        )
+                    }
+                    .buttonStyle(.bordered)
+                    .tint(.white)
+                    .disabled(
+                        jellyfin.isUpdatingPlayedState(for: selectedItem.id)
+                    )
+                }
+
                 Button {
                     coordinator.refreshJellyfinLibrary()
                 } label: {
@@ -450,7 +542,9 @@ struct LibraryWorkspaceView: View {
                 HStack(spacing: 12) {
                     ProgressView()
                     Text("载入中")
-                        .font(.system(size: 14, weight: .medium, design: .rounded))
+                        .font(
+                            .system(size: 14, weight: .medium, design: .rounded)
+                        )
                         .foregroundStyle(Palette.ink.opacity(0.68))
                 }
                 .padding(22)
@@ -472,12 +566,14 @@ struct LibraryWorkspaceView: View {
                             } label: {
                                 HStack(spacing: 14) {
                                     JellyfinArtworkView(
-                                        url: coordinator.jellyfinLibraryImageURL(
-                                            library,
-                                            width: 240,
-                                            height: 360
-                                        ),
-                                        placeholderSystemName: "square.stack.3d.up.fill",
+                                        url:
+                                            coordinator.jellyfinLibraryImageURL(
+                                                library,
+                                                width: 240,
+                                                height: 360
+                                            ),
+                                        placeholderSystemName:
+                                            "square.stack.3d.up.fill",
                                         cornerRadius: 22
                                     )
                                     .frame(
@@ -505,20 +601,28 @@ struct LibraryWorkspaceView: View {
                                                     design: .rounded
                                                 )
                                             )
-                                            .foregroundStyle(Palette.ink.opacity(0.6))
+                                            .foregroundStyle(
+                                                Palette.ink.opacity(0.6)
+                                            )
                                             .lineLimit(1)
                                     }
 
                                     Spacer(minLength: 0)
 
-                                    if jellyfin.selectedLibraryID == library.id {
-                                        Image(systemName: "checkmark.circle.fill")
-                                            .font(.system(size: 22, weight: .bold))
-                                            .foregroundStyle(Palette.accentDeep)
+                                    if jellyfin.selectedLibraryID == library.id
+                                    {
+                                        Image(
+                                            systemName: "checkmark.circle.fill"
+                                        )
+                                        .font(.system(size: 22, weight: .bold))
+                                        .foregroundStyle(Palette.accentDeep)
                                     }
                                 }
                                 .padding(14)
-                                .frame(width: metrics.shelfCardWidth, alignment: .leading)
+                                .frame(
+                                    width: metrics.shelfCardWidth,
+                                    alignment: .leading
+                                )
                                 .background(
                                     RoundedRectangle(
                                         cornerRadius: 26,
@@ -553,7 +657,9 @@ struct LibraryWorkspaceView: View {
     }
 
     @ViewBuilder
-    private func libraryExplorerContent(metrics: LibraryLayoutMetrics) -> some View {
+    private func libraryExplorerContent(metrics: LibraryLayoutMetrics)
+        -> some View
+    {
         VStack(alignment: .leading, spacing: 20) {
             if metrics.isCompact {
                 VStack(alignment: .leading, spacing: 12) {
@@ -624,7 +730,9 @@ struct LibraryWorkspaceView: View {
                 HStack(spacing: 12) {
                     ProgressView()
                     Text("载入中")
-                        .font(.system(size: 14, weight: .medium, design: .rounded))
+                        .font(
+                            .system(size: 14, weight: .medium, design: .rounded)
+                        )
                         .foregroundStyle(Palette.ink.opacity(0.68))
                 }
             } else if filteredJellyfinItems.isEmpty {
@@ -656,7 +764,8 @@ struct LibraryWorkspaceView: View {
                                             width: 420,
                                             height: 630
                                         ),
-                                        placeholderSystemName: item.kind.isSeriesLike
+                                        placeholderSystemName: item.kind
+                                            .isSeriesLike
                                             ? "tv.inset.filled" : "film.fill",
                                         cornerRadius: 24
                                     )
@@ -678,32 +787,49 @@ struct LibraryWorkspaceView: View {
                                                 .padding(.vertical, 6)
                                                 .background(
                                                     Capsule(style: .continuous)
-                                                        .fill(Color.black.opacity(0.48))
+                                                        .fill(
+                                                            Color.black.opacity(
+                                                                0.48
+                                                            )
+                                                        )
                                                 )
                                         }
 
                                         Spacer(minLength: 0)
 
                                         if progressFraction(
-                                            position: item.resumePositionSeconds,
+                                            position: item
+                                                .resumePositionSeconds,
                                             durationTicks: item.runTimeTicks
                                         ) > 0 {
                                             GeometryReader { proxy in
                                                 Capsule(style: .continuous)
-                                                    .fill(Color.white.opacity(0.18))
-                                                    .overlay(alignment: .leading) {
-                                                        Capsule(style: .continuous)
-                                                            .fill(Palette.accent)
-                                                            .frame(
-                                                                width: max(
-                                                                    8,
-                                                                    proxy.size.width
-                                                                        * progressFraction(
-                                                                            position: item.resumePositionSeconds,
-                                                                            durationTicks: item.runTimeTicks
-                                                                        )
-                                                                )
+                                                    .fill(
+                                                        Color.white.opacity(
+                                                            0.18
+                                                        )
+                                                    )
+                                                    .overlay(
+                                                        alignment: .leading
+                                                    ) {
+                                                        Capsule(
+                                                            style: .continuous
+                                                        )
+                                                        .fill(Palette.accent)
+                                                        .frame(
+                                                            width: max(
+                                                                8,
+                                                                proxy.size.width
+                                                                    * progressFraction(
+                                                                        position:
+                                                                            item
+                                                                            .resumePositionSeconds,
+                                                                        durationTicks:
+                                                                            item
+                                                                            .runTimeTicks
+                                                                    )
                                                             )
+                                                        )
                                                     }
                                             }
                                             .frame(height: 4)
@@ -733,12 +859,15 @@ struct LibraryWorkspaceView: View {
                                                     design: .rounded
                                                 )
                                             )
-                                            .foregroundStyle(Palette.ink.opacity(0.58))
+                                            .foregroundStyle(
+                                                Palette.ink.opacity(0.58)
+                                            )
                                             .lineLimit(2)
                                             .monospacedDigit()
                                     }
 
-                                    if let overview = item.overview?.nilIfBlank {
+                                    if let overview = item.overview?.nilIfBlank
+                                    {
                                         Text(overview)
                                             .font(
                                                 .system(
@@ -747,32 +876,41 @@ struct LibraryWorkspaceView: View {
                                                     design: .rounded
                                                 )
                                             )
-                                            .foregroundStyle(Palette.ink.opacity(0.46))
+                                            .foregroundStyle(
+                                                Palette.ink.opacity(0.46)
+                                            )
                                             .lineLimit(2)
                                     }
                                 }
                             }
                             .padding(14)
                             .background(
-                                RoundedRectangle(cornerRadius: 28, style: .continuous)
-                                    .fill(
-                                        jellyfin.selectedItemID == item.id
-                                            ? Palette.selection
-                                            : Color.white.opacity(0.88)
-                                    )
+                                RoundedRectangle(
+                                    cornerRadius: 28,
+                                    style: .continuous
+                                )
+                                .fill(
+                                    jellyfin.selectedItemID == item.id
+                                        ? Palette.selection
+                                        : Color.white.opacity(0.88)
+                                )
                             )
                             .overlay {
-                                RoundedRectangle(cornerRadius: 28, style: .continuous)
-                                    .strokeBorder(
-                                        jellyfin.selectedItemID == item.id
-                                            ? Palette.accent.opacity(0.34)
-                                            : .white.opacity(0.72),
-                                        lineWidth: 1
-                                    )
+                                RoundedRectangle(
+                                    cornerRadius: 28,
+                                    style: .continuous
+                                )
+                                .strokeBorder(
+                                    jellyfin.selectedItemID == item.id
+                                        ? Palette.accent.opacity(0.34)
+                                        : .white.opacity(0.72),
+                                    lineWidth: 1
+                                )
                             }
                             .shadow(
                                 color: .black.opacity(
-                                    jellyfin.selectedItemID == item.id ? 0.09 : 0.04
+                                    jellyfin.selectedItemID == item.id
+                                        ? 0.09 : 0.04
                                 ),
                                 radius: 14,
                                 x: 0,
@@ -788,9 +926,13 @@ struct LibraryWorkspaceView: View {
         .panelStyle(cornerRadius: metrics.heroCornerRadius)
     }
 
-    private func libraryInspectorPanel(metrics: LibraryLayoutMetrics) -> some View {
+    private func libraryInspectorPanel(metrics: LibraryLayoutMetrics)
+        -> some View
+    {
         VStack(alignment: .leading, spacing: 18) {
-            if let item = coordinator.selectedJellyfinItem, item.kind.isSeriesLike {
+            if let item = coordinator.selectedJellyfinItem,
+                item.kind.isSeriesLike
+            {
                 if !jellyfin.seasons.isEmpty {
                     VStack(alignment: .leading, spacing: 12) {
                         SectionHeader(
@@ -798,38 +940,61 @@ struct LibraryWorkspaceView: View {
                             systemImage: "square.grid.2x2.fill"
                         )
 
-                        ScrollView(.horizontal, showsIndicators: false) {
-                            HStack(spacing: 10) {
-                                ForEach(jellyfin.seasons) { season in
-                                    Button {
-                                        coordinator.selectJellyfinSeason(season)
-                                    } label: {
-                                        Text(season.displayTitle)
-                                            .font(
-                                                .system(
-                                                    size: 13,
-                                                    weight: .semibold,
-                                                    design: .rounded
-                                                )
+                        ScrollViewReader { seasonScrollProxy in
+                            ScrollView(.horizontal, showsIndicators: false) {
+                                HStack(spacing: 10) {
+                                    ForEach(jellyfin.seasons) { season in
+                                        Button {
+                                            coordinator.selectJellyfinSeason(
+                                                season
                                             )
-                                            .foregroundStyle(
-                                                jellyfin.selectedSeasonID == season.id
-                                                    ? .white : Palette.ink
-                                            )
-                                            .padding(.horizontal, 14)
-                                            .padding(.vertical, 10)
-                                            .background(
-                                                Capsule(style: .continuous)
-                                                    .fill(
-                                                        jellyfin.selectedSeasonID
-                                                            == season.id
-                                                            ? Palette.accentDeep
-                                                            : Color.white.opacity(0.82)
+                                        } label: {
+                                            Text(season.displayTitle)
+                                                .font(
+                                                    .system(
+                                                        size: 13,
+                                                        weight: .semibold,
+                                                        design: .rounded
                                                     )
-                                            )
+                                                )
+                                                .foregroundStyle(
+                                                    jellyfin.selectedSeasonID
+                                                        == season.id
+                                                        ? .white : Palette.ink
+                                                )
+                                                .padding(.horizontal, 14)
+                                                .padding(.vertical, 10)
+                                                .background(
+                                                    Capsule(style: .continuous)
+                                                        .fill(
+                                                            jellyfin
+                                                                .selectedSeasonID
+                                                                == season.id
+                                                                ? Palette
+                                                                    .accentDeep
+                                                                : Color.white
+                                                                    .opacity(
+                                                                        0.82
+                                                                    )
+                                                        )
+                                                )
+                                        }
+                                        .buttonStyle(.plain)
+                                        .id(librarySeasonID(for: season.id))
                                     }
-                                    .buttonStyle(.plain)
                                 }
+                            }
+                            .onAppear {
+                                scrollToSelectedSeason(
+                                    with: seasonScrollProxy,
+                                    animated: false
+                                )
+                            }
+                            .onChange(of: librarySeasonFocusToken) { _ in
+                                scrollToSelectedSeason(
+                                    with: seasonScrollProxy,
+                                    animated: true
+                                )
                             }
                         }
                     }
@@ -846,7 +1011,13 @@ struct LibraryWorkspaceView: View {
                         )
                         Spacer()
                         Text("\(filteredJellyfinEpisodes.count) 集")
-                            .font(.system(size: 12, weight: .semibold, design: .rounded))
+                            .font(
+                                .system(
+                                    size: 12,
+                                    weight: .semibold,
+                                    design: .rounded
+                                )
+                            )
                             .foregroundStyle(Palette.ink.opacity(0.52))
                     }
 
@@ -854,36 +1025,47 @@ struct LibraryWorkspaceView: View {
                         HStack(spacing: 12) {
                             ProgressView()
                             Text("载入中")
-                                .font(.system(size: 14, weight: .medium, design: .rounded))
+                                .font(
+                                    .system(
+                                        size: 14,
+                                        weight: .medium,
+                                        design: .rounded
+                                    )
+                                )
                                 .foregroundStyle(Palette.ink.opacity(0.68))
                         }
                     } else if filteredJellyfinEpisodes.isEmpty {
                         Text(jellyfinLibrarySearch.isEmpty ? "没有剧集" : "没有匹配结果")
-                            .font(.system(size: 14, weight: .medium, design: .rounded))
+                            .font(
+                                .system(
+                                    size: 14,
+                                    weight: .medium,
+                                    design: .rounded
+                                )
+                            )
                             .foregroundStyle(Palette.ink.opacity(0.58))
                     } else {
                         LazyVStack(spacing: 12) {
                             ForEach(filteredJellyfinEpisodes) { episode in
-                                Button {
-                                    workspaceSection = .player
-                                    coordinator.playJellyfinEpisode(episode)
-                                } label: {
-                                    HStack(alignment: .top, spacing: 12) {
-                                        JellyfinArtworkView(
-                                            url: coordinator.jellyfinEpisodeThumbnailURL(
+                                HStack(alignment: .top, spacing: 12) {
+                                    JellyfinArtworkView(
+                                        url:
+                                            coordinator
+                                            .jellyfinEpisodeThumbnailURL(
                                                 episode,
                                                 width: 320,
                                                 height: 180
                                             ),
-                                            placeholderSystemName: "play.tv.fill",
-                                            cornerRadius: 18
-                                        )
-                                        .frame(
-                                            width: metrics.episodeArtworkWidth,
-                                            height: metrics.episodeArtworkHeight
-                                        )
+                                        placeholderSystemName: "play.tv.fill",
+                                        cornerRadius: 18
+                                    )
+                                    .frame(
+                                        width: metrics.episodeArtworkWidth,
+                                        height: metrics.episodeArtworkHeight
+                                    )
 
-                                        VStack(alignment: .leading, spacing: 5) {
+                                    VStack(alignment: .leading, spacing: 5) {
+                                        HStack(spacing: 8) {
                                             Text(episode.displayTitle)
                                                 .font(
                                                     .system(
@@ -895,59 +1077,174 @@ struct LibraryWorkspaceView: View {
                                                 .foregroundStyle(Palette.ink)
                                                 .lineLimit(2)
 
-                                            if let runtime = runtimeText(
-                                                fromTicks: episode.runTimeTicks
-                                            ).nilIfEmpty {
-                                                Text(runtime)
-                                                    .font(
-                                                        .system(
-                                                            size: 12,
-                                                            weight: .semibold,
-                                                            design: .rounded
-                                                        )
+                                            if episode.isPlayed {
+                                                Image(
+                                                    systemName:
+                                                        "checkmark.circle.fill"
+                                                )
+                                                .font(
+                                                    .system(
+                                                        size: 14,
+                                                        weight: .bold
                                                     )
-                                                    .foregroundStyle(Palette.ink.opacity(0.58))
-                                            }
-
-                                            if let overview = episode.overview?.nilIfBlank {
-                                                Text(overview)
-                                                    .font(
-                                                        .system(
-                                                            size: 12,
-                                                            weight: .medium,
-                                                            design: .rounded
-                                                        )
-                                                    )
-                                                    .foregroundStyle(Palette.ink.opacity(0.46))
-                                                    .lineLimit(2)
+                                                )
+                                                .foregroundStyle(
+                                                    Palette.accentDeep
+                                                )
                                             }
                                         }
 
-                                        Spacer(minLength: 0)
+                                        if let runtime = runtimeText(
+                                            fromTicks: episode.runTimeTicks
+                                        ).nilIfEmpty {
+                                            Text(runtime)
+                                                .font(
+                                                    .system(
+                                                        size: 12,
+                                                        weight: .semibold,
+                                                        design: .rounded
+                                                    )
+                                                )
+                                                .foregroundStyle(
+                                                    Palette.ink.opacity(0.58)
+                                                )
+                                        }
 
-                                        Image(
-                                            systemName: jellyfin.selectedEpisodeID == episode.id
-                                                ? "speaker.wave.2.circle.fill"
-                                                : "play.circle.fill"
-                                        )
-                                        .font(.system(size: 24, weight: .semibold))
-                                        .foregroundStyle(
-                                            jellyfin.selectedEpisodeID == episode.id
-                                                ? Palette.accentDeep
-                                                : Palette.accent
-                                        )
+                                        if let overview = episode.overview?
+                                            .nilIfBlank
+                                        {
+                                            Text(overview)
+                                                .font(
+                                                    .system(
+                                                        size: 12,
+                                                        weight: .medium,
+                                                        design: .rounded
+                                                    )
+                                                )
+                                                .foregroundStyle(
+                                                    Palette.ink.opacity(0.46)
+                                                )
+                                                .lineLimit(2)
+                                        }
                                     }
-                                    .padding(12)
-                                    .background(
-                                        RoundedRectangle(cornerRadius: 20, style: .continuous)
-                                            .fill(
-                                                jellyfin.selectedEpisodeID == episode.id
-                                                    ? Palette.selection
-                                                    : Color.white.opacity(0.74)
+
+                                    Spacer(minLength: 0)
+
+                                    VStack(spacing: 10) {
+                                        Button {
+                                            workspaceSection = .player
+                                            coordinator.playJellyfinEpisode(
+                                                episode
                                             )
+                                        } label: {
+                                            Image(
+                                                systemName: jellyfin
+                                                    .selectedEpisodeID
+                                                    == episode.id
+                                                    ? "speaker.wave.2.circle.fill"
+                                                    : "play.circle.fill"
+                                            )
+                                            .font(
+                                                .system(
+                                                    size: 24,
+                                                    weight: .semibold
+                                                )
+                                            )
+                                            .foregroundStyle(
+                                                jellyfin.selectedEpisodeID
+                                                    == episode.id
+                                                    ? Palette.accentDeep
+                                                    : Palette.accent
+                                            )
+                                        }
+                                        .buttonStyle(.plain)
+
+                                        Button {
+                                            coordinator
+                                                .setJellyfinEpisodePlayedState(
+                                                    episode,
+                                                    played: !episode.isPlayed
+                                                )
+                                        } label: {
+                                            Group {
+                                                if jellyfin
+                                                    .isUpdatingPlayedState(
+                                                        for: episode.id
+                                                    )
+                                                {
+                                                    ProgressView()
+                                                        .tint(
+                                                            Palette.accentDeep
+                                                        )
+                                                } else {
+                                                    Image(
+                                                        systemName: episode
+                                                            .isPlayed
+                                                            ? "arrow.uturn.backward.circle.fill"
+                                                            : "checkmark.circle.fill"
+                                                    )
+                                                    .font(
+                                                        .system(
+                                                            size: 20,
+                                                            weight: .semibold
+                                                        )
+                                                    )
+                                                    .foregroundStyle(
+                                                        episode.isPlayed
+                                                            ? Palette.ink
+                                                                .opacity(0.62)
+                                                            : Palette.accentDeep
+                                                    )
+                                                }
+                                            }
+                                            .frame(width: 24, height: 24)
+                                        }
+                                        .buttonStyle(.plain)
+                                    }
+                                }
+                                .padding(12)
+                                .background(
+                                    RoundedRectangle(
+                                        cornerRadius: 20,
+                                        style: .continuous
+                                    )
+                                    .fill(
+                                        isTransientlyHighlightingEpisode(
+                                            episode.id
+                                        )
+                                            ? Palette.selection
+                                            : Color.white.opacity(0.74)
+                                    )
+                                )
+                                .overlay {
+                                    RoundedRectangle(
+                                        cornerRadius: 20,
+                                        style: .continuous
+                                    )
+                                    .strokeBorder(
+                                        isTransientlyHighlightingEpisode(
+                                            episode.id
+                                        )
+                                            ? Palette.accentDeep.opacity(0.4)
+                                            : .white.opacity(0.5),
+                                        lineWidth:
+                                            isTransientlyHighlightingEpisode(
+                                                episode.id
+                                            )
+                                            ? 1.5 : 1
                                     )
                                 }
-                                .buttonStyle(.plain)
+                                .contentShape(
+                                    RoundedRectangle(
+                                        cornerRadius: 20,
+                                        style: .continuous
+                                    )
+                                )
+                                .id(libraryEpisodeID(for: episode.id))
+                                .onTapGesture {
+                                    workspaceSection = .player
+                                    coordinator.playJellyfinEpisode(episode)
+                                }
                             }
                         }
                     }
@@ -967,7 +1264,8 @@ struct LibraryWorkspaceView: View {
                                     width: 360,
                                     height: 540
                                 ),
-                                placeholderSystemName: "square.stack.3d.up.fill",
+                                placeholderSystemName:
+                                    "square.stack.3d.up.fill",
                                 cornerRadius: 24
                             )
                             .frame(width: 132, height: 192)
@@ -1000,7 +1298,8 @@ struct LibraryWorkspaceView: View {
                                     width: 360,
                                     height: 540
                                 ),
-                                placeholderSystemName: "square.stack.3d.up.fill",
+                                placeholderSystemName:
+                                    "square.stack.3d.up.fill",
                                 cornerRadius: 24
                             )
                             .frame(width: 116, height: 168)
@@ -1030,7 +1329,9 @@ struct LibraryWorkspaceView: View {
                     }
                 } else {
                     Text("未选择节目")
-                        .font(.system(size: 14, weight: .medium, design: .rounded))
+                        .font(
+                            .system(size: 14, weight: .medium, design: .rounded)
+                        )
                         .foregroundStyle(Palette.ink.opacity(0.62))
                 }
             }
@@ -1059,8 +1360,62 @@ struct LibraryWorkspaceView: View {
         }
     }
 
+    private var libraryVerticalFocusToken: String {
+        [
+            coordinator.selectedJellyfinItem?.id ?? "",
+            jellyfin.selectedSeasonID ?? "",
+            jellyfin.selectedEpisodeID ?? "",
+            String(filteredJellyfinEpisodes.count),
+        ]
+        .joined(separator: "|")
+    }
+
+    private var librarySeasonFocusToken: String {
+        [
+            coordinator.selectedJellyfinItem?.id ?? "",
+            jellyfin.selectedSeasonID ?? "",
+            String(jellyfin.seasons.count),
+        ]
+        .joined(separator: "|")
+    }
+
+    private var preferredLibraryVerticalTargetID: String? {
+        if let episodeID = jellyfin.selectedEpisodeID,
+            filteredJellyfinEpisodes.contains(where: { $0.id == episodeID })
+        {
+            return libraryEpisodeID(for: episodeID)
+        }
+        if coordinator.selectedJellyfinItem?.kind.isSeriesLike == true {
+            return libraryInspectorID
+        }
+        if coordinator.selectedJellyfinItem != nil {
+            return librarySelectedItemID
+        }
+        return nil
+    }
+
     private var normalizedLibrarySearch: String {
         jellyfinLibrarySearch.foldedForSearch()
+    }
+
+    private var librarySelectedItemID: String {
+        "jellyfin-library-selected-item"
+    }
+
+    private var libraryInspectorID: String {
+        "jellyfin-library-inspector"
+    }
+
+    private func librarySeasonID(for seasonID: String) -> String {
+        "jellyfin-library-season-\(seasonID)"
+    }
+
+    private func libraryEpisodeID(for episodeID: String) -> String {
+        "jellyfin-library-episode-\(episodeID)"
+    }
+
+    private func isTransientlyHighlightingEpisode(_ episodeID: String) -> Bool {
+        transientHighlightedEpisodeID == episodeID
     }
 
     private func runtimeText(fromTicks ticks: Double?) -> String {
@@ -1072,7 +1427,75 @@ struct LibraryWorkspaceView: View {
         return "\(totalMinutes) 分钟"
     }
 
-    private func progressFraction(position: Double?, durationTicks: Double?) -> CGFloat {
+    private func scrollToFocusedLibraryContext(
+        with proxy: ScrollViewProxy,
+        animated: Bool
+    ) {
+        guard let targetID = preferredLibraryVerticalTargetID else { return }
+
+        DispatchQueue.main.async {
+            let anchor: UnitPoint =
+                targetID == librarySelectedItemID ? .top : .center
+
+            if animated {
+                withAnimation(.spring(response: 0.32, dampingFraction: 0.88)) {
+                    proxy.scrollTo(targetID, anchor: anchor)
+                }
+            } else {
+                proxy.scrollTo(targetID, anchor: anchor)
+            }
+        }
+    }
+
+    private func scrollToSelectedSeason(
+        with proxy: ScrollViewProxy,
+        animated: Bool
+    ) {
+        guard let selectedSeasonID = jellyfin.selectedSeasonID else { return }
+        let targetID = librarySeasonID(for: selectedSeasonID)
+
+        DispatchQueue.main.async {
+            if animated {
+                withAnimation(.spring(response: 0.28, dampingFraction: 0.9)) {
+                    proxy.scrollTo(targetID, anchor: .center)
+                }
+            } else {
+                proxy.scrollTo(targetID, anchor: .center)
+            }
+        }
+    }
+
+    private func refreshTransientEpisodeHighlight(for episodeID: String?) {
+        clearEpisodeHighlightTask?.cancel()
+        clearEpisodeHighlightTask = nil
+
+        guard let episodeID else {
+            withAnimation(.easeOut(duration: 0.2)) {
+                transientHighlightedEpisodeID = nil
+            }
+            return
+        }
+
+        withAnimation(.spring(response: 0.28, dampingFraction: 0.88)) {
+            transientHighlightedEpisodeID = episodeID
+        }
+
+        clearEpisodeHighlightTask = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 3_000_000_000)
+            guard !Task.isCancelled, transientHighlightedEpisodeID == episodeID
+            else {
+                return
+            }
+            withAnimation(.easeOut(duration: 0.45)) {
+                transientHighlightedEpisodeID = nil
+            }
+            clearEpisodeHighlightTask = nil
+        }
+    }
+
+    private func progressFraction(position: Double?, durationTicks: Double?)
+        -> CGFloat
+    {
         guard let position, let durationTicks else { return 0 }
         let duration = durationTicks / 10_000_000.0
         guard duration > 0 else { return 0 }

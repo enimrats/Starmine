@@ -3,6 +3,7 @@ import Foundation
 
 struct JellyfinPlaybackCandidate: Hashable {
     var session: JellyfinPlaybackSession
+    var itemKind: JellyfinItemKind
     var title: String
     var episodeLabel: String
     var collectionTitle: String?
@@ -14,6 +15,16 @@ struct JellyfinPlaybackCandidate: Hashable {
     var seasonEpisodeCount: Int?
     var episodeNumber: Int?
     var resumePosition: Double?
+}
+
+private struct JellyfinTrackedPlayback {
+    var accountID: UUID
+    var session: JellyfinPlaybackSession
+    var itemKind: JellyfinItemKind
+    var hasLoaded = false
+    var lastReportedPosition = 0.0
+    var lastReportedAt: Date?
+    var lastPausedState: Bool?
 }
 
 @MainActor
@@ -28,12 +39,22 @@ final class JellyfinStore: ObservableObject {
     @Published var selectedSeasonID: String?
     @Published var episodes: [JellyfinEpisode] = []
     @Published var selectedEpisodeID: String?
+    @Published var resumeItems: [JellyfinHomeItem] = []
+    @Published var recentItems: [JellyfinHomeItem] = []
+    @Published var nextUpItems: [JellyfinHomeItem] = []
+    @Published var recommendedItems: [JellyfinHomeItem] = []
     @Published var isLoading = false
+    @Published var isRefreshingHome = false
     @Published var isConnecting = false
+    @Published private(set) var updatingPlayedItemIDs: Set<String> = []
+    @Published private(set) var isSyncingPlayback = false
+    @Published private(set) var lastPlaybackSyncAt: Date?
 
     private let client: any JellyfinClientProtocol
     private(set) var previousRemoteEpisode: JellyfinEpisode?
     private(set) var nextRemoteEpisode: JellyfinEpisode?
+    private var activeTrackedPlayback: JellyfinTrackedPlayback?
+    private var selectedItemOverride: JellyfinMediaItem?
 
     init(client: any JellyfinClientProtocol = JellyfinClient.shared) {
         self.client = client
@@ -52,7 +73,12 @@ final class JellyfinStore: ObservableObject {
     }
 
     var selectedItem: JellyfinMediaItem? {
-        items.first(where: { $0.id == selectedItemID })
+        if let selectedItemID,
+            let item = items.first(where: { $0.id == selectedItemID })
+        {
+            return item
+        }
+        return selectedItemOverride
     }
 
     var selectedSeason: JellyfinSeason? {
@@ -76,6 +102,7 @@ final class JellyfinStore: ObservableObject {
         applySnapshot(snapshot)
         guard selectedAccountID != nil else { return }
         try await refreshLibrary()
+        try await refreshHome()
     }
 
     func connect(
@@ -96,6 +123,7 @@ final class JellyfinStore: ObservableObject {
         applySnapshot(snapshot)
         clearBrowseState(clearLibraries: true)
         try await refreshLibrary()
+        try await refreshHome()
     }
 
     func addRoute(serverURL: String, routeName: String?) async throws {
@@ -119,6 +147,7 @@ final class JellyfinStore: ObservableObject {
         applySnapshot(snapshot)
         clearBrowseState(clearLibraries: true)
         try await refreshLibrary()
+        try await refreshHome()
     }
 
     func switchRoute(_ routeID: UUID) async throws {
@@ -130,6 +159,7 @@ final class JellyfinStore: ObservableObject {
             routeID: routeID
         )
         applySnapshot(snapshot)
+        try await refreshHome()
     }
 
     func removeSelectedAccount() async throws {
@@ -149,6 +179,75 @@ final class JellyfinStore: ObservableObject {
         clearBrowseState(clearLibraries: selectedAccountID == nil)
         if selectedAccountID != nil {
             try await refreshLibrary()
+            try await refreshHome()
+        } else {
+            clearHomeState()
+        }
+    }
+
+    func refreshHome() async throws {
+        guard let accountID = selectedAccountID else {
+            clearHomeState()
+            return
+        }
+
+        isRefreshingHome = true
+        defer { isRefreshingHome = false }
+
+        var errors: [Error] = []
+
+        do {
+            resumeItems = deduplicated(
+                try await client.loadResumeItems(
+                    accountID: accountID,
+                    limit: 12
+                )
+            )
+        } catch {
+            resumeItems = []
+            errors.append(error)
+        }
+
+        do {
+            recentItems = deduplicated(
+                try await client.loadRecentItems(
+                    accountID: accountID,
+                    limit: 12
+                )
+            )
+        } catch {
+            recentItems = []
+            errors.append(error)
+        }
+
+        do {
+            nextUpItems = deduplicated(
+                try await client.loadNextUp(accountID: accountID, limit: 12)
+            )
+        } catch {
+            nextUpItems = []
+            errors.append(error)
+        }
+
+        do {
+            let exclusions = Set(
+                resumeItems.map(\.id) + nextUpItems.map(\.id)
+                    + recentItems.map(\.id)
+            )
+            recommendedItems = deduplicated(
+                try await client.loadRecommendedItems(
+                    accountID: accountID,
+                    limit: 12
+                )
+            )
+            .filter { !exclusions.contains($0.id) }
+        } catch {
+            recommendedItems = []
+            errors.append(error)
+        }
+
+        if errors.count == 4, let firstError = errors.first {
+            throw firstError
         }
     }
 
@@ -206,6 +305,7 @@ final class JellyfinStore: ObservableObject {
 
     func selectItem(_ item: JellyfinMediaItem) async throws {
         selectedItemID = item.id
+        selectedItemOverride = item
         selectedSeasonID = nil
         selectedEpisodeID = nil
         seasons = []
@@ -240,6 +340,93 @@ final class JellyfinStore: ObservableObject {
         clearSelectionState()
     }
 
+    func focusLibraryContext(for homeItem: JellyfinHomeItem) async throws {
+        switch homeItem.kind {
+        case .episode:
+            guard let seriesID = homeItem.seriesID else {
+                throw JellyfinClientError.requestFailed("无法定位对应剧集。")
+            }
+
+            var payload: [String: Any] = [
+                "Id": seriesID,
+                "Name": homeItem.seriesName ?? homeItem.name,
+                "Type": "Series",
+            ]
+            if let overview = homeItem.overview?.nilIfBlank {
+                payload["Overview"] = overview
+            }
+            if let imagePrimaryTag = homeItem.imagePrimaryTag {
+                payload["ImageTags"] = ["Primary": imagePrimaryTag]
+            }
+
+            let seriesItem = JellyfinMediaItem(
+                payload: payload
+            )
+
+            try await selectItem(seriesItem)
+
+            let resolvedSeason =
+                homeItem.seasonID.flatMap { seasonID in
+                    seasons.first(where: { $0.id == seasonID })
+                }
+                ?? homeItem.parentIndexNumber.flatMap { seasonNumber in
+                    seasons.first(where: { $0.indexNumber == seasonNumber })
+                }
+
+            if let resolvedSeason, selectedSeasonID != resolvedSeason.id {
+                try await selectSeason(resolvedSeason)
+            }
+
+            if episodes.contains(where: { $0.id == homeItem.id }) {
+                selectedEpisodeID = homeItem.id
+            }
+
+        case .series:
+            try await selectItem(JellyfinMediaItem(homeItem: homeItem))
+
+        case .movie, .video:
+            selectedItemID = homeItem.id
+            selectedItemOverride = JellyfinMediaItem(homeItem: homeItem)
+            selectedSeasonID = nil
+            selectedEpisodeID = nil
+            seasons = []
+            episodes = []
+            clearRemoteNavigation()
+
+        default:
+            throw JellyfinClientError.requestFailed("该项目暂不支持定位到媒体库。")
+        }
+    }
+
+    func setPlayedState(itemID: String, played: Bool) async throws {
+        guard let accountID = selectedAccountID else {
+            throw JellyfinClientError.accountNotFound
+        }
+
+        updatingPlayedItemIDs.insert(itemID)
+        defer {
+            updatingPlayedItemIDs.remove(itemID)
+        }
+
+        if played {
+            try await client.markPlayed(accountID: accountID, itemID: itemID)
+        } else {
+            try await client.markUnplayed(accountID: accountID, itemID: itemID)
+        }
+
+        applyPlayedStateLocally(itemID: itemID, played: played)
+
+        do {
+            try await refreshHome()
+        } catch {
+            // Keep local state if refreshing shelves fails.
+        }
+    }
+
+    func isUpdatingPlayedState(for itemID: String) -> Bool {
+        updatingPlayedItemIDs.contains(itemID)
+    }
+
     func makePlaybackCandidate(for item: JellyfinMediaItem) async throws
         -> JellyfinPlaybackCandidate
     {
@@ -259,6 +446,7 @@ final class JellyfinStore: ObservableObject {
 
         return JellyfinPlaybackCandidate(
             session: session,
+            itemKind: item.kind,
             title: item.name,
             episodeLabel: "",
             collectionTitle: nil,
@@ -298,6 +486,7 @@ final class JellyfinStore: ObservableObject {
 
         return JellyfinPlaybackCandidate(
             session: session,
+            itemKind: .episode,
             title: episode.seriesName ?? episode.name,
             episodeLabel: episode.displayTitle,
             collectionTitle: episode.seriesName,
@@ -311,6 +500,169 @@ final class JellyfinStore: ObservableObject {
             episodeNumber: episode.danmakuEpisodeOrdinal,
             resumePosition: episode.resumePositionSeconds
         )
+    }
+
+    func makePlaybackCandidate(for homeItem: JellyfinHomeItem) async throws
+        -> JellyfinPlaybackCandidate
+    {
+        switch homeItem.kind {
+        case .episode:
+            return try await makePlaybackCandidate(
+                for: episodeCandidate(from: homeItem)
+            )
+        case .movie, .video:
+            return try await makePlaybackCandidate(
+                for: JellyfinMediaItem(homeItem: homeItem)
+            )
+        default:
+            throw JellyfinClientError.requestFailed("该项目不可直接播放。")
+        }
+    }
+
+    func beginPlaybackTracking(
+        candidate: JellyfinPlaybackCandidate,
+        initialPosition: Double = 0,
+        isPaused: Bool = false
+    ) async {
+        guard let accountID = selectedAccountID else { return }
+
+        activeTrackedPlayback = JellyfinTrackedPlayback(
+            accountID: accountID,
+            session: candidate.session,
+            itemKind: candidate.itemKind
+        )
+        isSyncingPlayback = true
+        applyPlaybackProgressLocally(
+            itemID: candidate.session.itemID,
+            positionSeconds: max(
+                initialPosition,
+                candidate.resumePosition ?? 0
+            ),
+            finished: false
+        )
+
+        do {
+            try await client.reportPlaybackStarted(
+                accountID: accountID,
+                session: candidate.session,
+                positionSeconds: initialPosition,
+                isPaused: isPaused
+            )
+            if var tracked = activeTrackedPlayback,
+                tracked.session.itemID == candidate.session.itemID
+            {
+                tracked.lastReportedAt = Date()
+                tracked.lastReportedPosition = max(0, initialPosition)
+                tracked.lastPausedState = isPaused
+                activeTrackedPlayback = tracked
+            }
+            lastPlaybackSyncAt = Date()
+        } catch {
+            // Keep local state and retry on the next progress pulse.
+        }
+    }
+
+    func markActivePlaybackLoaded() {
+        guard var tracked = activeTrackedPlayback else { return }
+        tracked.hasLoaded = true
+        activeTrackedPlayback = tracked
+    }
+
+    var hasLoadedActivePlayback: Bool {
+        activeTrackedPlayback?.hasLoaded ?? false
+    }
+
+    func reportActivePlaybackProgress(
+        positionSeconds: Double,
+        durationSeconds: Double,
+        isPaused: Bool,
+        force: Bool = false
+    ) async {
+        guard var tracked = activeTrackedPlayback else { return }
+
+        let clampedPosition = clampedPlaybackPosition(
+            positionSeconds,
+            durationSeconds: durationSeconds
+        )
+        let now = Date()
+        let pauseChanged = tracked.lastPausedState != isPaused
+        let timeDelta =
+            tracked.lastReportedAt.map { now.timeIntervalSince($0) }
+            ?? .greatestFiniteMagnitude
+        let positionDelta = abs(clampedPosition - tracked.lastReportedPosition)
+
+        applyPlaybackProgressLocally(
+            itemID: tracked.session.itemID,
+            positionSeconds: clampedPosition,
+            finished: false
+        )
+
+        guard force || pauseChanged || timeDelta >= 10 || positionDelta >= 15
+        else {
+            return
+        }
+
+        do {
+            try await client.reportPlaybackProgress(
+                accountID: tracked.accountID,
+                session: tracked.session,
+                positionSeconds: clampedPosition,
+                isPaused: isPaused
+            )
+            tracked.lastReportedAt = now
+            tracked.lastReportedPosition = clampedPosition
+            tracked.lastPausedState = isPaused
+            activeTrackedPlayback = tracked
+            lastPlaybackSyncAt = now
+        } catch {
+            // Retry on the next forced or periodic sync.
+        }
+    }
+
+    func finishPlaybackTracking(
+        positionSeconds: Double,
+        durationSeconds: Double,
+        isPaused: Bool,
+        finished: Bool
+    ) async {
+        guard let tracked = activeTrackedPlayback else { return }
+        let clampedPosition = clampedPlaybackPosition(
+            positionSeconds,
+            durationSeconds: durationSeconds
+        )
+
+        applyPlaybackProgressLocally(
+            itemID: tracked.session.itemID,
+            positionSeconds: clampedPosition,
+            finished: finished
+        )
+
+        do {
+            try await client.reportPlaybackStopped(
+                accountID: tracked.accountID,
+                session: tracked.session,
+                positionSeconds: clampedPosition,
+                isPaused: isPaused,
+                finished: finished
+            )
+            lastPlaybackSyncAt = Date()
+        } catch {
+            // Keep the UI responsive even if the final sync fails.
+        }
+
+        activeTrackedPlayback = nil
+        isSyncingPlayback = false
+
+        do {
+            try await refreshHome()
+        } catch {
+            // Preserve the last known shelves when refresh fails.
+        }
+    }
+
+    func cancelPlaybackTracking() {
+        activeTrackedPlayback = nil
+        isSyncingPlayback = false
     }
 
     func clearRemoteNavigation() {
@@ -375,6 +727,35 @@ final class JellyfinStore: ObservableObject {
         )
     }
 
+    func jellyfinPosterURL(
+        for homeItem: JellyfinHomeItem,
+        width: Int = 440,
+        height: Int = 660
+    ) -> URL? {
+        imageURL(
+            itemID: homeItem.id,
+            imageType: "Primary",
+            tag: homeItem.imagePrimaryTag,
+            width: width,
+            height: height
+        )
+    }
+
+    func jellyfinBackdropURL(
+        for homeItem: JellyfinHomeItem,
+        width: Int = 1400,
+        height: Int = 700
+    ) -> URL? {
+        imageURL(
+            itemID: homeItem.id,
+            imageType: "Backdrop",
+            tag: homeItem.imageBackdropTag,
+            width: width,
+            height: height,
+            index: 0
+        )
+    }
+
     func jellyfinEpisodeThumbnailURL(
         _ episode: JellyfinEpisode,
         width: Int = 480,
@@ -402,6 +783,7 @@ final class JellyfinStore: ObservableObject {
 
     private func clearSelectionState() {
         selectedItemID = nil
+        selectedItemOverride = nil
         selectedSeasonID = nil
         selectedEpisodeID = nil
         seasons = []
@@ -416,6 +798,14 @@ final class JellyfinStore: ObservableObject {
         }
         items = []
         clearSelectionState()
+    }
+
+    private func clearHomeState() {
+        resumeItems = []
+        recentItems = []
+        nextUpItems = []
+        recommendedItems = []
+        cancelPlaybackTracking()
     }
 
     private func imageURL(
@@ -487,6 +877,273 @@ final class JellyfinStore: ObservableObject {
         } else {
             episodes = []
         }
+    }
+
+    private func episodeCandidate(from homeItem: JellyfinHomeItem)
+        -> JellyfinEpisode
+    {
+        JellyfinEpisode(homeItem: homeItem)
+    }
+
+    private func clampedPlaybackPosition(
+        _ positionSeconds: Double,
+        durationSeconds: Double
+    ) -> Double {
+        guard durationSeconds > 0 else {
+            return max(0, positionSeconds)
+        }
+        return min(durationSeconds, max(0, positionSeconds))
+    }
+
+    private func deduplicated(_ items: [JellyfinHomeItem]) -> [JellyfinHomeItem]
+    {
+        var seen = Set<String>()
+        return items.filter { item in
+            seen.insert(item.id).inserted
+        }
+    }
+
+    private func applyPlaybackProgressLocally(
+        itemID: String,
+        positionSeconds: Double,
+        finished: Bool
+    ) {
+        items = items.map { item in
+            guard item.id == itemID else { return item }
+            var updated = item
+            updated.userData = updatedUserData(
+                from: item.userData,
+                positionSeconds: positionSeconds,
+                finished: finished
+            )
+            return updated
+        }
+
+        if var selectedItemOverrideCopy = selectedItemOverride,
+            selectedItemOverrideCopy.id == itemID
+        {
+            let currentUserData = selectedItemOverrideCopy.userData
+            selectedItemOverrideCopy.userData = updatedUserData(
+                from: currentUserData,
+                positionSeconds: positionSeconds,
+                finished: finished
+            )
+            selectedItemOverride = selectedItemOverrideCopy
+        }
+
+        episodes = episodes.map { episode in
+            guard episode.id == itemID else { return episode }
+            var updated = episode
+            updated.userData = updatedUserData(
+                from: episode.userData,
+                positionSeconds: positionSeconds,
+                finished: finished
+            )
+            return updated
+        }
+
+        resumeItems = updatedHomeSection(
+            resumeItems,
+            itemID: itemID,
+            positionSeconds: positionSeconds,
+            finished: finished,
+            insertsIfMissing: !finished && positionSeconds > 15,
+            prefersFrontInsertion: true
+        )
+        recentItems = updatedHomeSection(
+            recentItems,
+            itemID: itemID,
+            positionSeconds: positionSeconds,
+            finished: finished,
+            insertsIfMissing: positionSeconds > 5,
+            prefersFrontInsertion: true
+        )
+        nextUpItems = updatedHomeSection(
+            nextUpItems,
+            itemID: itemID,
+            positionSeconds: positionSeconds,
+            finished: finished,
+            insertsIfMissing: false,
+            prefersFrontInsertion: false
+        )
+        recommendedItems = updatedHomeSection(
+            recommendedItems,
+            itemID: itemID,
+            positionSeconds: positionSeconds,
+            finished: finished,
+            insertsIfMissing: false,
+            prefersFrontInsertion: false
+        )
+    }
+
+    private func updatedHomeSection(
+        _ items: [JellyfinHomeItem],
+        itemID: String,
+        positionSeconds: Double,
+        finished: Bool,
+        insertsIfMissing: Bool,
+        prefersFrontInsertion: Bool
+    ) -> [JellyfinHomeItem] {
+        var updatedItems = items
+        let now = Date()
+
+        if let index = updatedItems.firstIndex(where: { $0.id == itemID }) {
+            if finished {
+                updatedItems.remove(at: index)
+                return updatedItems
+            }
+
+            var updated = updatedItems[index]
+            updated.userData = updatedUserData(
+                from: updated.userData,
+                positionSeconds: positionSeconds,
+                finished: false,
+                playedAt: now
+            )
+            updatedItems[index] = updated
+            if prefersFrontInsertion, index != 0 {
+                let moved = updatedItems.remove(at: index)
+                updatedItems.insert(moved, at: 0)
+            }
+            return updatedItems
+        }
+
+        guard insertsIfMissing, !finished, var seed = knownHomeItem(for: itemID)
+        else {
+            return updatedItems
+        }
+
+        seed.userData = updatedUserData(
+            from: seed.userData,
+            positionSeconds: positionSeconds,
+            finished: false,
+            playedAt: now
+        )
+        if prefersFrontInsertion {
+            updatedItems.insert(seed, at: 0)
+        } else {
+            updatedItems.append(seed)
+        }
+        return deduplicated(updatedItems)
+    }
+
+    private func knownHomeItem(for itemID: String) -> JellyfinHomeItem? {
+        resumeItems.first(where: { $0.id == itemID })
+            ?? recentItems.first(where: { $0.id == itemID })
+            ?? nextUpItems.first(where: { $0.id == itemID })
+            ?? recommendedItems.first(where: { $0.id == itemID })
+            ?? items.first(where: { $0.id == itemID }).map(
+                JellyfinHomeItem.init(mediaItem:)
+            )
+            ?? episodes.first(where: { $0.id == itemID }).map(
+                JellyfinHomeItem.init(episode:)
+            )
+    }
+
+    private func applyPlayedStateLocally(itemID: String, played: Bool) {
+        items = items.map { item in
+            guard item.id == itemID else { return item }
+            var updated = item
+            updated.userData = updatedPlayedUserData(
+                from: item.userData,
+                played: played
+            )
+            return updated
+        }
+
+        if var selectedItemOverrideCopy = selectedItemOverride,
+            selectedItemOverrideCopy.id == itemID
+        {
+            let currentUserData = selectedItemOverrideCopy.userData
+            selectedItemOverrideCopy.userData = updatedPlayedUserData(
+                from: currentUserData,
+                played: played
+            )
+            selectedItemOverride = selectedItemOverrideCopy
+        }
+
+        episodes = episodes.map { episode in
+            guard episode.id == itemID else { return episode }
+            var updated = episode
+            updated.userData = updatedPlayedUserData(
+                from: episode.userData,
+                played: played
+            )
+            return updated
+        }
+
+        resumeItems = updatedPlayedHomeSection(
+            resumeItems,
+            itemID: itemID,
+            played: played,
+            removeWhenPlayed: true
+        )
+        recentItems = updatedPlayedHomeSection(
+            recentItems,
+            itemID: itemID,
+            played: played,
+            removeWhenPlayed: false
+        )
+        nextUpItems = updatedPlayedHomeSection(
+            nextUpItems,
+            itemID: itemID,
+            played: played,
+            removeWhenPlayed: played
+        )
+        recommendedItems = updatedPlayedHomeSection(
+            recommendedItems,
+            itemID: itemID,
+            played: played,
+            removeWhenPlayed: false
+        )
+    }
+
+    private func updatedPlayedHomeSection(
+        _ items: [JellyfinHomeItem],
+        itemID: String,
+        played: Bool,
+        removeWhenPlayed: Bool
+    ) -> [JellyfinHomeItem] {
+        if removeWhenPlayed, played {
+            return items.filter { $0.id != itemID }
+        }
+
+        return items.map { item in
+            guard item.id == itemID else { return item }
+            var updated = item
+            updated.userData = updatedPlayedUserData(
+                from: item.userData,
+                played: played
+            )
+            return updated
+        }
+    }
+
+    private func updatedPlayedUserData(
+        from userData: JellyfinUserData?,
+        played: Bool
+    ) -> JellyfinUserData {
+        var updated = userData ?? JellyfinUserData()
+        updated.played = played
+        updated.playbackPositionTicks =
+            played ? 0 : updated.playbackPositionTicks
+        updated.playCount = played ? max(updated.playCount ?? 0, 1) : 0
+        updated.lastPlayedDate = Date()
+        return updated
+    }
+
+    private func updatedUserData(
+        from userData: JellyfinUserData?,
+        positionSeconds: Double,
+        finished: Bool,
+        playedAt: Date = Date()
+    ) -> JellyfinUserData {
+        var updated = userData ?? JellyfinUserData()
+        updated.played = finished ? true : false
+        updated.playbackPositionTicks =
+            finished ? 0 : positionSeconds * 10_000_000.0
+        updated.lastPlayedDate = playedAt
+        return updated
     }
 
     private func resolveRemoteEpisodeNeighbors(for episode: JellyfinEpisode)

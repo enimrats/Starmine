@@ -172,21 +172,27 @@ struct JellyfinUserData: Codable, Hashable {
     var played: Bool?
     var playbackPositionTicks: Double?
     var playCount: Int?
+    var lastPlayedDate: Date?
 
     init(
         played: Bool? = nil,
         playbackPositionTicks: Double? = nil,
-        playCount: Int? = nil
+        playCount: Int? = nil,
+        lastPlayedDate: Date? = nil
     ) {
         self.played = played
         self.playbackPositionTicks = playbackPositionTicks
         self.playCount = playCount
+        self.lastPlayedDate = lastPlayedDate
     }
 
     init(payload: [String: Any]) {
         played = payload.bool("Played")
         playbackPositionTicks = payload.double("PlaybackPositionTicks")
         playCount = payload.int("PlayCount")
+        lastPlayedDate = JellyfinDateParser.parse(
+            payload.string("LastPlayedDate")
+        )
     }
 
     var playbackPositionSeconds: Double? {
@@ -442,6 +448,155 @@ struct JellyfinMediaItem: Identifiable, Hashable {
     var resumePositionSeconds: Double? {
         userData?.playbackPositionSeconds
     }
+
+    var isPlayed: Bool {
+        userData?.played == true
+    }
+}
+
+struct JellyfinHomeItem: Identifiable, Hashable {
+    var id: String
+    var name: String
+    var overview: String?
+    var seriesID: String?
+    var seriesName: String?
+    var seasonID: String?
+    var seasonName: String?
+    var imagePrimaryTag: String?
+    var imageBackdropTag: String?
+    var kind: JellyfinItemKind
+    var productionYear: Int?
+    var communityRating: String?
+    var runTimeTicks: Double?
+    var indexNumber: Int?
+    var parentIndexNumber: Int?
+    var userData: JellyfinUserData?
+    var dateCreated: Date?
+
+    init(payload: [String: Any]) {
+        id = payload.string("Id") ?? UUID().uuidString
+        name = payload.string("Name") ?? "未命名项目"
+        overview = payload.string("Overview")
+        seriesID = payload.string("SeriesId")
+        seriesName = payload.string("SeriesName")
+        seasonID = payload.string("SeasonId")
+        seasonName = payload.string("SeasonName")
+        imagePrimaryTag = payload.dictionary("ImageTags")?.string("Primary")
+        imageBackdropTag = payload.strings("BackdropImageTags").first
+        kind = JellyfinItemKind(apiValue: payload.string("Type"))
+        productionYear = payload.int("ProductionYear")
+        communityRating = payload.value("CommunityRating").flatMap {
+            String(describing: $0).nilIfBlank
+        }
+        runTimeTicks = payload.double("RunTimeTicks")
+        indexNumber = payload.int("IndexNumber")
+        parentIndexNumber = payload.int("ParentIndexNumber")
+        userData = payload.dictionary("UserData").map(
+            JellyfinUserData.init(payload:)
+        )
+        dateCreated = JellyfinDateParser.parse(payload.string("DateCreated"))
+    }
+
+    init(mediaItem: JellyfinMediaItem) {
+        id = mediaItem.id
+        name = mediaItem.name
+        overview = mediaItem.overview
+        seriesID = nil
+        seriesName = nil
+        seasonID = nil
+        seasonName = nil
+        imagePrimaryTag = mediaItem.imagePrimaryTag
+        imageBackdropTag = mediaItem.imageBackdropTag
+        kind = mediaItem.kind
+        productionYear = mediaItem.productionYear
+        communityRating = mediaItem.communityRating
+        runTimeTicks = mediaItem.runTimeTicks
+        indexNumber = nil
+        parentIndexNumber = nil
+        userData = mediaItem.userData
+        dateCreated = mediaItem.dateAdded
+    }
+
+    init(episode: JellyfinEpisode) {
+        id = episode.id
+        name = episode.name
+        overview = episode.overview
+        seriesID = episode.seriesID
+        seriesName = episode.seriesName
+        seasonID = episode.seasonID
+        seasonName = episode.seasonName
+        imagePrimaryTag = episode.imagePrimaryTag
+        imageBackdropTag = nil
+        kind = .episode
+        productionYear = nil
+        communityRating = nil
+        runTimeTicks = episode.runTimeTicks
+        indexNumber = episode.indexNumber
+        parentIndexNumber = episode.parentIndexNumber
+        userData = episode.userData
+        dateCreated = nil
+    }
+
+    var displayTitle: String {
+        if kind == .episode {
+            return seriesName ?? name
+        }
+        return name
+    }
+
+    var detailTitle: String {
+        if kind == .episode {
+            return episodeDisplayTitle
+        }
+        return metaLine.nilIfEmpty ?? kind.displayName
+    }
+
+    var metaLine: String {
+        [
+            kind.displayName,
+            productionYear.map(String.init),
+            formattedCommunityRating.map { "评分 \($0)" },
+        ]
+        .compactMap { $0 }
+        .joined(separator: " · ")
+    }
+
+    var episodeDisplayTitle: String {
+        if let parentIndexNumber, let indexNumber {
+            return "S\(parentIndexNumber)E\(indexNumber) · \(name)"
+        }
+        if let indexNumber {
+            return "第 \(indexNumber) 集 · \(name)"
+        }
+        return name
+    }
+
+    var formattedCommunityRating: String? {
+        guard let communityRating = communityRating?.nilIfBlank else {
+            return nil
+        }
+        guard let value = Double(communityRating) else {
+            return communityRating
+        }
+        return String(format: "%.2f", value)
+    }
+
+    var resumePositionSeconds: Double? {
+        userData?.playbackPositionSeconds
+    }
+
+    var progressFraction: Double {
+        guard let position = resumePositionSeconds, let runTimeTicks else {
+            return 0
+        }
+        let duration = runTimeTicks / 10_000_000.0
+        guard duration > 0 else { return 0 }
+        return max(0, min(1, position / duration))
+    }
+
+    var isPlayed: Bool {
+        userData?.played == true
+    }
 }
 
 struct JellyfinSeason: Identifiable, Hashable {
@@ -523,6 +678,10 @@ struct JellyfinEpisode: Identifiable, Hashable {
     var resumePositionSeconds: Double? {
         userData?.playbackPositionSeconds
     }
+
+    var isPlayed: Bool {
+        userData?.played == true
+    }
 }
 
 struct JellyfinPlaybackMediaSource: Identifiable, Hashable {
@@ -563,6 +722,41 @@ enum JellyfinDateParser {
         guard let rawValue = rawValue?.nilIfBlank else { return nil }
         return internetWithFractional.date(from: rawValue)
             ?? internet.date(from: rawValue)
+    }
+}
+
+extension JellyfinMediaItem {
+    init(homeItem: JellyfinHomeItem) {
+        id = homeItem.id
+        name = homeItem.name
+        overview = homeItem.overview
+        originalTitle = nil
+        imagePrimaryTag = homeItem.imagePrimaryTag
+        imageBackdropTag = homeItem.imageBackdropTag
+        kind = homeItem.kind
+        productionYear = homeItem.productionYear
+        dateAdded = homeItem.dateCreated
+        premiereDate = nil
+        communityRating = homeItem.communityRating
+        runTimeTicks = homeItem.runTimeTicks
+        userData = homeItem.userData
+    }
+}
+
+extension JellyfinEpisode {
+    init(homeItem: JellyfinHomeItem) {
+        id = homeItem.id
+        name = homeItem.name
+        overview = homeItem.overview
+        seriesID = homeItem.seriesID
+        seriesName = homeItem.seriesName
+        seasonID = homeItem.seasonID
+        seasonName = homeItem.seasonName
+        imagePrimaryTag = homeItem.imagePrimaryTag
+        indexNumber = homeItem.indexNumber
+        parentIndexNumber = homeItem.parentIndexNumber
+        runTimeTicks = homeItem.runTimeTicks
+        userData = homeItem.userData
     }
 }
 
