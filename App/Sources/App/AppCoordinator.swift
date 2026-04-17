@@ -103,6 +103,14 @@ final class AppCoordinator: ObservableObject {
         jellyfin.activeRoute
     }
 
+    var homeJellyfinAccount: JellyfinAccountProfile? {
+        jellyfin.homeAccount
+    }
+
+    var homeJellyfinRoute: JellyfinRoute? {
+        jellyfin.homeRoute
+    }
+
     var selectedJellyfinLibrary: JellyfinLibrary? {
         jellyfin.selectedLibrary
     }
@@ -323,6 +331,17 @@ final class AppCoordinator: ObservableObject {
         }
     }
 
+    func selectHomeJellyfinAccount(_ accountID: UUID) {
+        Task { [weak self] in
+            guard let self else { return }
+            do {
+                try await self.jellyfin.selectHomeAccount(accountID)
+            } catch {
+                self.handleError(error)
+            }
+        }
+    }
+
     func selectJellyfinLibrary(_ library: JellyfinLibrary) {
         Task { [weak self] in
             guard let self else { return }
@@ -385,6 +404,7 @@ final class AppCoordinator: ObservableObject {
         Task { [weak self] in
             guard let self else { return }
             do {
+                _ = try await self.jellyfin.switchToHomeAccountForBrowsing()
                 try await self.jellyfin.focusLibraryContext(for: item)
                 self.syncJellyfinNavigation()
             } catch {
@@ -398,7 +418,7 @@ final class AppCoordinator: ObservableObject {
         Task { [weak self] in
             guard let self else { return }
             do {
-                try await self.jellyfin.setPlayedState(
+                try await self.jellyfin.setHomePlayedState(
                     itemID: item.id,
                     played: played
                 )

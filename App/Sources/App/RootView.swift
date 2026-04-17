@@ -757,9 +757,10 @@ struct RootView: View {
             .buttonStyle(.borderedProminent)
             .tint(Palette.accentDeep)
 
-            if let activeAccountID = coordinator.activeJellyfinAccount?.id {
+            if let homeAccountID = coordinator.homeJellyfinAccount?.id {
                 Button {
-                    workspaceSection = .library(activeAccountID)
+                    coordinator.switchJellyfinAccount(homeAccountID)
+                    workspaceSection = .library(homeAccountID)
                 } label: {
                     Label("进入媒体库", systemImage: "rectangle.stack.fill")
                         .font(
@@ -807,9 +808,12 @@ struct RootView: View {
             },
             onSetHomeItemPlayedState: { item, played in
                 setHomeItemPlayedState(item, played: played)
+            },
+            onSelectHomeSource: { accountID in
+                coordinator.selectHomeJellyfinAccount(accountID)
             }
         )
-        .task(id: jellyfin.selectedAccountID) {
+        .task(id: jellyfin.homeAccountID) {
             coordinator.refreshJellyfinHome()
         }
     }
@@ -823,10 +827,11 @@ struct RootView: View {
     }
 
     private func showHomeLibrary() {
-        guard let activeAccountID = coordinator.activeJellyfinAccount?.id else {
+        guard let homeAccountID = coordinator.homeJellyfinAccount?.id else {
             return
         }
-        workspaceSection = .library(activeAccountID)
+        coordinator.switchJellyfinAccount(homeAccountID)
+        workspaceSection = .library(homeAccountID)
     }
 
     private func selectHomeItem(_ item: JellyfinHomeItem) {
@@ -835,51 +840,15 @@ struct RootView: View {
             workspaceSection = .player
             return
         }
-
-        guard let activeAccountID = coordinator.activeJellyfinAccount?.id else {
-            return
-        }
-
-        jellyfinLibrarySearch = ""
-
-        let libraryItem: JellyfinMediaItem
-        switch item.kind {
-        case .series:
-            libraryItem = JellyfinMediaItem(
-                payload: [
-                    "Id": item.id,
-                    "Name": item.name,
-                    "Type": "Series",
-                    "Overview": item.overview as Any,
-                    "ProductionYear": item.productionYear as Any,
-                    "CommunityRating": item.communityRating as Any,
-                    "RunTimeTicks": item.runTimeTicks as Any,
-                ].compactMapValues { $0 }
-            )
-        default:
-            if let seriesID = item.seriesID {
-                libraryItem = JellyfinMediaItem(
-                    payload: [
-                        "Id": seriesID,
-                        "Name": item.seriesName ?? item.name,
-                        "Type": "Series",
-                    ]
-                )
-            } else {
-                libraryItem = JellyfinMediaItem(homeItem: item)
-            }
-        }
-
-        workspaceSection = .library(activeAccountID)
-        coordinator.selectJellyfinItem(libraryItem)
+        openHomeItemInLibrary(item)
     }
 
     private func openHomeItemInLibrary(_ item: JellyfinHomeItem) {
-        guard let activeAccountID = coordinator.activeJellyfinAccount?.id else {
+        guard let homeAccountID = coordinator.homeJellyfinAccount?.id else {
             return
         }
         jellyfinLibrarySearch = ""
-        workspaceSection = .library(activeAccountID)
+        workspaceSection = .library(homeAccountID)
         coordinator.openJellyfinHomeItemInLibrary(item)
     }
 
@@ -1962,12 +1931,17 @@ private struct HomeDashboardView: View {
     let onSelectHomeItem: (JellyfinHomeItem) -> Void
     let onOpenHomeItemInLibrary: (JellyfinHomeItem) -> Void
     let onSetHomeItemPlayedState: (JellyfinHomeItem, Bool) -> Void
+    let onSelectHomeSource: (UUID) -> Void
 
     private var featuredItem: JellyfinHomeItem? {
         jellyfin.resumeItems.first
             ?? jellyfin.nextUpItems.first
             ?? jellyfin.recommendedItems.first
             ?? jellyfin.recentItems.first
+    }
+
+    private var homeSourceAccount: JellyfinAccountProfile? {
+        coordinator.homeJellyfinAccount
     }
 
     var body: some View {
@@ -2103,6 +2077,7 @@ private struct HomeDashboardView: View {
                 if metrics.isCompact {
                     VStack(alignment: .leading, spacing: 18) {
                         heroTopRow(metrics: metrics)
+                        homeSourceSelector(metrics: metrics)
                         heroCopy(title: heroTitle, subtitle: heroSubtitle)
                         if let featuredItem {
                             heroPoster(
@@ -2118,6 +2093,7 @@ private struct HomeDashboardView: View {
                     HStack(alignment: .bottom, spacing: 24) {
                         VStack(alignment: .leading, spacing: 18) {
                             heroTopRow(metrics: metrics)
+                            homeSourceSelector(metrics: metrics)
                             heroCopy(title: heroTitle, subtitle: heroSubtitle)
                             heroStatus(metrics: metrics)
                             heroActions(metrics: metrics)
@@ -2163,6 +2139,118 @@ private struct HomeDashboardView: View {
             }
 
             heroRefreshButton
+        }
+    }
+
+    @ViewBuilder
+    private func homeSourceSelector(metrics: HomeDashboardMetrics) -> some View
+    {
+        if let account = homeSourceAccount {
+            let label = homeSourceSelectorLabel(
+                account: account,
+                route: coordinator.homeJellyfinRoute,
+                showsSwitcher: jellyfin.accounts.count > 1,
+                metrics: metrics
+            )
+
+            if jellyfin.accounts.count > 1 {
+                Menu {
+                    ForEach(jellyfin.accounts) { candidate in
+                        Button {
+                            onSelectHomeSource(candidate.id)
+                        } label: {
+                            if candidate.id == jellyfin.homeAccountID {
+                                Label(
+                                    candidate.displayTitle,
+                                    systemImage: "checkmark"
+                                )
+                            } else {
+                                Text(candidate.displayTitle)
+                            }
+                        }
+                    }
+                } label: {
+                    label
+                }
+                .buttonStyle(.plain)
+            } else {
+                label
+            }
+        }
+    }
+
+    private func homeSourceSelectorLabel(
+        account: JellyfinAccountProfile,
+        route: JellyfinRoute?,
+        showsSwitcher: Bool,
+        metrics: HomeDashboardMetrics
+    ) -> some View {
+        HStack(alignment: .center, spacing: 14) {
+            Image(systemName: "sparkles.rectangle.stack.fill")
+                .font(.system(size: metrics.isCompact ? 16 : 18, weight: .bold))
+                .foregroundStyle(.white)
+                .frame(width: 36, height: 36)
+                .background(.white.opacity(0.18))
+                .clipShape(
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                )
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text("推荐来源")
+                    .font(.system(size: 11, weight: .bold, design: .rounded))
+                    .foregroundStyle(.white.opacity(0.76))
+                Text(account.displayTitle)
+                    .font(
+                        .system(
+                            size: metrics.isCompact ? 14 : 15,
+                            weight: .bold,
+                            design: .rounded
+                        )
+                    )
+                    .foregroundStyle(.white)
+                    .lineLimit(1)
+
+                if let routeLine = route?.name.nilIfBlank {
+                    Text(routeLine)
+                        .font(
+                            .system(
+                                size: 11,
+                                weight: .medium,
+                                design: .rounded
+                            )
+                        )
+                        .foregroundStyle(.white.opacity(0.74))
+                        .lineLimit(1)
+                }
+            }
+
+            Spacer(minLength: 12)
+
+            if showsSwitcher {
+                VStack(spacing: 4) {
+                    Text("切换")
+                        .font(
+                            .system(
+                                size: 11,
+                                weight: .bold,
+                                design: .rounded
+                            )
+                        )
+                    Image(systemName: "chevron.up.chevron.down")
+                        .font(.system(size: 11, weight: .bold))
+                }
+                .foregroundStyle(.white.opacity(0.88))
+            }
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 12)
+        .background(
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .fill(.white.opacity(0.13))
+        )
+        .overlay {
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .strokeBorder(.white.opacity(0.12), lineWidth: 1)
         }
     }
 
@@ -2312,9 +2400,9 @@ private struct HomeDashboardView: View {
             if jellyfin.isSyncingPlayback && playback.isPlayingRemote {
                 StatPill(text: "已同步", emphasized: true)
             }
-        } else if let account = coordinator.activeJellyfinAccount {
+        } else if let account = coordinator.homeJellyfinAccount {
             PillLabel(text: account.serverName)
-            if let route = coordinator.activeJellyfinRoute?.name {
+            if let route = coordinator.homeJellyfinRoute?.name {
                 PillLabel(text: route)
             }
         } else {
@@ -2354,7 +2442,7 @@ private struct HomeDashboardView: View {
             .buttonStyle(.borderedProminent)
             .tint(Palette.accentDeep)
 
-            if coordinator.activeJellyfinAccount != nil {
+            if coordinator.homeJellyfinAccount != nil {
                 Button {
                     onShowLibrary()
                 } label: {
@@ -2376,7 +2464,7 @@ private struct HomeDashboardView: View {
             .buttonStyle(.borderedProminent)
             .tint(Palette.accentDeep)
 
-            if coordinator.activeJellyfinAccount != nil {
+            if coordinator.homeJellyfinAccount != nil {
                 Button {
                     onOpenHomeItemInLibrary(featuredItem)
                 } label: {
@@ -2500,7 +2588,7 @@ private struct HomeDashboardView: View {
                                         Spacer(minLength: 8)
 
                                         HStack(spacing: 6) {
-                                            if coordinator.activeJellyfinAccount
+                                            if coordinator.homeJellyfinAccount
                                                 != nil
                                             {
                                                 homeOverlayIconButton(
@@ -2631,7 +2719,7 @@ private struct HomeDashboardView: View {
         if let featuredItem {
             return featuredItem.displayTitle
         }
-        if let account = coordinator.activeJellyfinAccount {
+        if let account = coordinator.homeJellyfinAccount {
             return account.displayTitle
         }
         return "Starmine"
@@ -2645,7 +2733,7 @@ private struct HomeDashboardView: View {
         if let featuredItem {
             return featuredItem.detailTitle
         }
-        if let route = coordinator.activeJellyfinRoute?.name {
+        if let route = coordinator.homeJellyfinRoute?.name {
             return route
         }
         return nil

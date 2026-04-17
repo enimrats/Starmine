@@ -2,6 +2,7 @@ import Combine
 import Foundation
 
 struct JellyfinPlaybackCandidate: Hashable {
+    var accountID: UUID
     var session: JellyfinPlaybackSession
     var itemKind: JellyfinItemKind
     var title: String
@@ -29,8 +30,11 @@ private struct JellyfinTrackedPlayback {
 
 @MainActor
 final class JellyfinStore: ObservableObject {
+    private static let homeAccountDefaultsKey = "starmine.jellyfin.home-account"
+
     @Published var accounts: [JellyfinAccountProfile] = []
     @Published var selectedAccountID: UUID?
+    @Published var homeAccountID: UUID?
     @Published var libraries: [JellyfinLibrary] = []
     @Published var selectedLibraryID: String?
     @Published var items: [JellyfinMediaItem] = []
@@ -51,13 +55,18 @@ final class JellyfinStore: ObservableObject {
     @Published private(set) var lastPlaybackSyncAt: Date?
 
     private let client: any JellyfinClientProtocol
+    private let defaults: UserDefaults
     private(set) var previousRemoteEpisode: JellyfinEpisode?
     private(set) var nextRemoteEpisode: JellyfinEpisode?
     private var activeTrackedPlayback: JellyfinTrackedPlayback?
     private var selectedItemOverride: JellyfinMediaItem?
 
-    init(client: any JellyfinClientProtocol = JellyfinClient.shared) {
+    init(
+        client: any JellyfinClientProtocol = JellyfinClient.shared,
+        defaults: UserDefaults = .standard
+    ) {
         self.client = client
+        self.defaults = defaults
     }
 
     var activeAccount: JellyfinAccountProfile? {
@@ -66,6 +75,14 @@ final class JellyfinStore: ObservableObject {
 
     var activeRoute: JellyfinRoute? {
         activeAccount?.activeRoute
+    }
+
+    var homeAccount: JellyfinAccountProfile? {
+        accounts.first(where: { $0.id == homeAccountID })
+    }
+
+    var homeRoute: JellyfinRoute? {
+        homeAccount?.activeRoute
     }
 
     var selectedLibrary: JellyfinLibrary? {
@@ -100,9 +117,16 @@ final class JellyfinStore: ObservableObject {
     func restoreState() async throws {
         let snapshot = await client.snapshot()
         applySnapshot(snapshot)
-        guard selectedAccountID != nil else { return }
-        try await refreshLibrary()
-        try await refreshHome()
+        if selectedAccountID != nil {
+            try await refreshLibrary()
+        } else {
+            clearBrowseState(clearLibraries: true)
+        }
+        if homeAccountID != nil {
+            try await refreshHome()
+        } else {
+            clearHomeState()
+        }
     }
 
     func connect(
@@ -123,7 +147,11 @@ final class JellyfinStore: ObservableObject {
         applySnapshot(snapshot)
         clearBrowseState(clearLibraries: true)
         try await refreshLibrary()
-        try await refreshHome()
+        if homeAccountID != nil {
+            try await refreshHome()
+        } else {
+            clearHomeState()
+        }
     }
 
     func addRoute(serverURL: String, routeName: String?) async throws {
@@ -147,6 +175,16 @@ final class JellyfinStore: ObservableObject {
         applySnapshot(snapshot)
         clearBrowseState(clearLibraries: true)
         try await refreshLibrary()
+    }
+
+    func selectHomeAccount(_ accountID: UUID) async throws {
+        guard accounts.contains(where: { $0.id == accountID }) else {
+            throw JellyfinClientError.accountNotFound
+        }
+        guard homeAccountID != accountID else { return }
+        homeAccountID = accountID
+        persistHomeAccountSelection()
+        clearHomeShelves()
         try await refreshHome()
     }
 
@@ -171,14 +209,19 @@ final class JellyfinStore: ObservableObject {
 
     func removeAccount(_ accountID: UUID) async throws {
         let removedSelectedAccount = selectedAccountID == accountID
+        let removedHomeAccount = homeAccountID == accountID
         let snapshot = try await client.removeAccount(accountID)
         applySnapshot(snapshot)
 
-        guard removedSelectedAccount else { return }
+        guard removedSelectedAccount || removedHomeAccount else { return }
 
-        clearBrowseState(clearLibraries: selectedAccountID == nil)
-        if selectedAccountID != nil {
-            try await refreshLibrary()
+        if removedSelectedAccount {
+            clearBrowseState(clearLibraries: selectedAccountID == nil)
+            if selectedAccountID != nil {
+                try await refreshLibrary()
+            }
+        }
+        if homeAccountID != nil {
             try await refreshHome()
         } else {
             clearHomeState()
@@ -186,7 +229,7 @@ final class JellyfinStore: ObservableObject {
     }
 
     func refreshHome() async throws {
-        guard let accountID = selectedAccountID else {
+        guard let accountID = homeAccountID else {
             clearHomeState()
             return
         }
@@ -249,6 +292,16 @@ final class JellyfinStore: ObservableObject {
         if errors.count == 4, let firstError = errors.first {
             throw firstError
         }
+    }
+
+    func switchToHomeAccountForBrowsing() async throws -> UUID {
+        guard let accountID = homeAccountID else {
+            throw JellyfinClientError.accountNotFound
+        }
+        if selectedAccountID != accountID {
+            try await switchAccount(accountID)
+        }
+        return accountID
     }
 
     func refreshLibrary() async throws {
@@ -402,7 +455,29 @@ final class JellyfinStore: ObservableObject {
         guard let accountID = selectedAccountID else {
             throw JellyfinClientError.accountNotFound
         }
+        try await setPlayedState(
+            itemID: itemID,
+            played: played,
+            accountID: accountID
+        )
+    }
 
+    func setHomePlayedState(itemID: String, played: Bool) async throws {
+        guard let accountID = homeAccountID else {
+            throw JellyfinClientError.accountNotFound
+        }
+        try await setPlayedState(
+            itemID: itemID,
+            played: played,
+            accountID: accountID
+        )
+    }
+
+    private func setPlayedState(
+        itemID: String,
+        played: Bool,
+        accountID: UUID
+    ) async throws {
         updatingPlayedItemIDs.insert(itemID)
         defer {
             updatingPlayedItemIDs.remove(itemID)
@@ -414,12 +489,18 @@ final class JellyfinStore: ObservableObject {
             try await client.markUnplayed(accountID: accountID, itemID: itemID)
         }
 
-        applyPlayedStateLocally(itemID: itemID, played: played)
+        applyPlayedStateLocally(
+            itemID: itemID,
+            played: played,
+            accountID: accountID
+        )
 
-        do {
-            try await refreshHome()
-        } catch {
-            // Keep local state if refreshing shelves fails.
+        if accountID == homeAccountID {
+            do {
+                try await refreshHome()
+            } catch {
+                // Keep local state if refreshing shelves fails.
+            }
         }
     }
 
@@ -433,7 +514,18 @@ final class JellyfinStore: ObservableObject {
         guard let accountID = selectedAccountID else {
             throw JellyfinClientError.accountNotFound
         }
+        return try await makePlaybackCandidate(
+            for: item,
+            accountID: accountID,
+            syncBrowseSelection: true
+        )
+    }
 
+    private func makePlaybackCandidate(
+        for item: JellyfinMediaItem,
+        accountID: UUID,
+        syncBrowseSelection: Bool
+    ) async throws -> JellyfinPlaybackCandidate {
         let session = try await client.createPlaybackSession(
             accountID: accountID,
             itemID: item.id,
@@ -441,10 +533,13 @@ final class JellyfinStore: ObservableObject {
         )
         let snapshot = await client.snapshot()
         applySnapshot(snapshot)
-        selectedEpisodeID = nil
+        if syncBrowseSelection {
+            selectedEpisodeID = nil
+        }
         clearRemoteNavigation()
 
         return JellyfinPlaybackCandidate(
+            accountID: accountID,
             session: session,
             itemKind: item.kind,
             title: item.name,
@@ -467,7 +562,18 @@ final class JellyfinStore: ObservableObject {
         guard let accountID = selectedAccountID else {
             throw JellyfinClientError.accountNotFound
         }
+        return try await makePlaybackCandidate(
+            for: episode,
+            accountID: accountID,
+            syncBrowseSelection: true
+        )
+    }
 
+    private func makePlaybackCandidate(
+        for episode: JellyfinEpisode,
+        accountID: UUID,
+        syncBrowseSelection: Bool
+    ) async throws -> JellyfinPlaybackCandidate {
         let session = try await client.createPlaybackSession(
             accountID: accountID,
             itemID: episode.id,
@@ -475,23 +581,34 @@ final class JellyfinStore: ObservableObject {
         )
         let snapshot = await client.snapshot()
         applySnapshot(snapshot)
-        selectedItemID = episode.seriesID ?? selectedItemID
-        selectedEpisodeID = episode.id
+        if syncBrowseSelection {
+            selectedItemID = episode.seriesID ?? selectedItemID
+            selectedEpisodeID = episode.id
+        }
 
-        await resolveRemoteEpisodeNeighbors(for: episode)
+        await resolveRemoteEpisodeNeighbors(
+            for: episode,
+            accountID: accountID,
+            preferredEpisodes: syncBrowseSelection ? episodes : nil
+        )
 
-        let seasonEpisodeCount = episodes.filter {
-            $0.danmakuEpisodeOrdinal != nil
-        }.count
+        let seasonEpisodeCount =
+            syncBrowseSelection
+            ? episodes.filter {
+                $0.danmakuEpisodeOrdinal != nil
+            }.count
+            : 0
 
         return JellyfinPlaybackCandidate(
+            accountID: accountID,
             session: session,
             itemKind: .episode,
             title: episode.seriesName ?? episode.name,
             episodeLabel: episode.displayTitle,
             collectionTitle: episode.seriesName,
             danmakuQuery: episode.seriesName ?? episode.name,
-            remoteSeriesID: episode.seriesID ?? selectedItemID,
+            remoteSeriesID: episode.seriesID
+                ?? (syncBrowseSelection ? selectedItemID : nil),
             remoteSeasonID: episode.seasonID,
             remoteEpisodeID: episode.id,
             seasonNumber: episode.parentIndexNumber,
@@ -505,14 +622,22 @@ final class JellyfinStore: ObservableObject {
     func makePlaybackCandidate(for homeItem: JellyfinHomeItem) async throws
         -> JellyfinPlaybackCandidate
     {
+        guard let accountID = homeAccountID else {
+            throw JellyfinClientError.accountNotFound
+        }
+
         switch homeItem.kind {
         case .episode:
             return try await makePlaybackCandidate(
-                for: episodeCandidate(from: homeItem)
+                for: episodeCandidate(from: homeItem),
+                accountID: accountID,
+                syncBrowseSelection: accountID == selectedAccountID
             )
         case .movie, .video:
             return try await makePlaybackCandidate(
-                for: JellyfinMediaItem(homeItem: homeItem)
+                for: JellyfinMediaItem(homeItem: homeItem),
+                accountID: accountID,
+                syncBrowseSelection: accountID == selectedAccountID
             )
         default:
             throw JellyfinClientError.requestFailed("该项目不可直接播放。")
@@ -524,15 +649,14 @@ final class JellyfinStore: ObservableObject {
         initialPosition: Double = 0,
         isPaused: Bool = false
     ) async {
-        guard let accountID = selectedAccountID else { return }
-
         activeTrackedPlayback = JellyfinTrackedPlayback(
-            accountID: accountID,
+            accountID: candidate.accountID,
             session: candidate.session,
             itemKind: candidate.itemKind
         )
         isSyncingPlayback = true
         applyPlaybackProgressLocally(
+            accountID: candidate.accountID,
             itemID: candidate.session.itemID,
             positionSeconds: max(
                 initialPosition,
@@ -543,7 +667,7 @@ final class JellyfinStore: ObservableObject {
 
         do {
             try await client.reportPlaybackStarted(
-                accountID: accountID,
+                accountID: candidate.accountID,
                 session: candidate.session,
                 positionSeconds: initialPosition,
                 isPaused: isPaused
@@ -592,6 +716,7 @@ final class JellyfinStore: ObservableObject {
         let positionDelta = abs(clampedPosition - tracked.lastReportedPosition)
 
         applyPlaybackProgressLocally(
+            accountID: tracked.accountID,
             itemID: tracked.session.itemID,
             positionSeconds: clampedPosition,
             finished: false
@@ -632,6 +757,7 @@ final class JellyfinStore: ObservableObject {
         )
 
         applyPlaybackProgressLocally(
+            accountID: tracked.accountID,
             itemID: tracked.session.itemID,
             positionSeconds: clampedPosition,
             finished: finished
@@ -653,10 +779,12 @@ final class JellyfinStore: ObservableObject {
         activeTrackedPlayback = nil
         isSyncingPlayback = false
 
-        do {
-            try await refreshHome()
-        } catch {
-            // Preserve the last known shelves when refresh fails.
+        if tracked.accountID == homeAccountID {
+            do {
+                try await refreshHome()
+            } catch {
+                // Preserve the last known shelves when refresh fails.
+            }
         }
     }
 
@@ -733,6 +861,7 @@ final class JellyfinStore: ObservableObject {
         height: Int = 660
     ) -> URL? {
         imageURL(
+            accountID: homeAccountID,
             itemID: homeItem.id,
             imageType: "Primary",
             tag: homeItem.imagePrimaryTag,
@@ -747,6 +876,7 @@ final class JellyfinStore: ObservableObject {
         height: Int = 700
     ) -> URL? {
         imageURL(
+            accountID: homeAccountID,
             itemID: homeItem.id,
             imageType: "Backdrop",
             tag: homeItem.imageBackdropTag,
@@ -779,6 +909,23 @@ final class JellyfinStore: ObservableObject {
         } else {
             selectedAccountID = snapshot.accounts.first?.id
         }
+
+        let persistedHomeAccountID =
+            defaults.string(forKey: Self.homeAccountDefaultsKey)
+            .flatMap(UUID.init(uuidString:))
+        let resolvedHomeAccountID =
+            homeAccountID.flatMap { currentID in
+                snapshot.accounts.contains(where: { $0.id == currentID })
+                    ? currentID : nil
+            }
+            ?? persistedHomeAccountID.flatMap { savedID in
+                snapshot.accounts.contains(where: { $0.id == savedID })
+                    ? savedID : nil
+            }
+            ?? selectedAccountID
+            ?? snapshot.accounts.first?.id
+        homeAccountID = resolvedHomeAccountID
+        persistHomeAccountSelection()
     }
 
     private func clearSelectionState() {
@@ -801,14 +948,19 @@ final class JellyfinStore: ObservableObject {
     }
 
     private func clearHomeState() {
+        clearHomeShelves()
+        cancelPlaybackTracking()
+    }
+
+    private func clearHomeShelves() {
         resumeItems = []
         recentItems = []
         nextUpItems = []
         recommendedItems = []
-        cancelPlaybackTracking()
     }
 
     private func imageURL(
+        accountID: UUID? = nil,
         itemID: String,
         imageType: String,
         tag: String?,
@@ -817,7 +969,12 @@ final class JellyfinStore: ObservableObject {
         index: Int? = nil,
         quality: Int = 90
     ) -> URL? {
-        guard let account = activeAccount, let route = activeRoute else {
+        let resolvedAccountID = accountID ?? selectedAccountID
+        guard
+            let resolvedAccountID,
+            let account = accounts.first(where: { $0.id == resolvedAccountID }),
+            let route = account.activeRoute
+        else {
             return nil
         }
 
@@ -903,23 +1060,37 @@ final class JellyfinStore: ObservableObject {
         }
     }
 
+    private func persistHomeAccountSelection() {
+        defaults.set(
+            homeAccountID?.uuidString,
+            forKey: Self.homeAccountDefaultsKey
+        )
+    }
+
     private func applyPlaybackProgressLocally(
+        accountID: UUID,
         itemID: String,
         positionSeconds: Double,
         finished: Bool
     ) {
-        items = items.map { item in
-            guard item.id == itemID else { return item }
-            var updated = item
-            updated.userData = updatedUserData(
-                from: item.userData,
-                positionSeconds: positionSeconds,
-                finished: finished
-            )
-            return updated
+        let shouldUpdateBrowseContext = accountID == selectedAccountID
+        let shouldUpdateHomeContext = accountID == homeAccountID
+
+        if shouldUpdateBrowseContext {
+            items = items.map { item in
+                guard item.id == itemID else { return item }
+                var updated = item
+                updated.userData = updatedUserData(
+                    from: item.userData,
+                    positionSeconds: positionSeconds,
+                    finished: finished
+                )
+                return updated
+            }
         }
 
-        if var selectedItemOverrideCopy = selectedItemOverride,
+        if shouldUpdateBrowseContext,
+            var selectedItemOverrideCopy = selectedItemOverride,
             selectedItemOverrideCopy.id == itemID
         {
             let currentUserData = selectedItemOverrideCopy.userData
@@ -931,49 +1102,57 @@ final class JellyfinStore: ObservableObject {
             selectedItemOverride = selectedItemOverrideCopy
         }
 
-        episodes = episodes.map { episode in
-            guard episode.id == itemID else { return episode }
-            var updated = episode
-            updated.userData = updatedUserData(
-                from: episode.userData,
-                positionSeconds: positionSeconds,
-                finished: finished
-            )
-            return updated
+        if shouldUpdateBrowseContext {
+            episodes = episodes.map { episode in
+                guard episode.id == itemID else { return episode }
+                var updated = episode
+                updated.userData = updatedUserData(
+                    from: episode.userData,
+                    positionSeconds: positionSeconds,
+                    finished: finished
+                )
+                return updated
+            }
         }
 
-        resumeItems = updatedHomeSection(
-            resumeItems,
-            itemID: itemID,
-            positionSeconds: positionSeconds,
-            finished: finished,
-            insertsIfMissing: !finished && positionSeconds > 15,
-            prefersFrontInsertion: true
-        )
-        recentItems = updatedHomeSection(
-            recentItems,
-            itemID: itemID,
-            positionSeconds: positionSeconds,
-            finished: finished,
-            insertsIfMissing: positionSeconds > 5,
-            prefersFrontInsertion: true
-        )
-        nextUpItems = updatedHomeSection(
-            nextUpItems,
-            itemID: itemID,
-            positionSeconds: positionSeconds,
-            finished: finished,
-            insertsIfMissing: false,
-            prefersFrontInsertion: false
-        )
-        recommendedItems = updatedHomeSection(
-            recommendedItems,
-            itemID: itemID,
-            positionSeconds: positionSeconds,
-            finished: finished,
-            insertsIfMissing: false,
-            prefersFrontInsertion: false
-        )
+        if shouldUpdateHomeContext {
+            resumeItems = updatedHomeSection(
+                resumeItems,
+                itemID: itemID,
+                positionSeconds: positionSeconds,
+                finished: finished,
+                insertsIfMissing: !finished && positionSeconds > 15,
+                prefersFrontInsertion: true,
+                canUseBrowseContext: shouldUpdateBrowseContext
+            )
+            recentItems = updatedHomeSection(
+                recentItems,
+                itemID: itemID,
+                positionSeconds: positionSeconds,
+                finished: finished,
+                insertsIfMissing: positionSeconds > 5,
+                prefersFrontInsertion: true,
+                canUseBrowseContext: shouldUpdateBrowseContext
+            )
+            nextUpItems = updatedHomeSection(
+                nextUpItems,
+                itemID: itemID,
+                positionSeconds: positionSeconds,
+                finished: finished,
+                insertsIfMissing: false,
+                prefersFrontInsertion: false,
+                canUseBrowseContext: shouldUpdateBrowseContext
+            )
+            recommendedItems = updatedHomeSection(
+                recommendedItems,
+                itemID: itemID,
+                positionSeconds: positionSeconds,
+                finished: finished,
+                insertsIfMissing: false,
+                prefersFrontInsertion: false,
+                canUseBrowseContext: shouldUpdateBrowseContext
+            )
+        }
     }
 
     private func updatedHomeSection(
@@ -982,7 +1161,8 @@ final class JellyfinStore: ObservableObject {
         positionSeconds: Double,
         finished: Bool,
         insertsIfMissing: Bool,
-        prefersFrontInsertion: Bool
+        prefersFrontInsertion: Bool,
+        canUseBrowseContext: Bool
     ) -> [JellyfinHomeItem] {
         var updatedItems = items
         let now = Date()
@@ -1008,7 +1188,13 @@ final class JellyfinStore: ObservableObject {
             return updatedItems
         }
 
-        guard insertsIfMissing, !finished, var seed = knownHomeItem(for: itemID)
+        guard
+            insertsIfMissing,
+            !finished,
+            var seed = knownHomeItem(
+                for: itemID,
+                canUseBrowseContext: canUseBrowseContext
+            )
         else {
             return updatedItems
         }
@@ -1027,31 +1213,49 @@ final class JellyfinStore: ObservableObject {
         return deduplicated(updatedItems)
     }
 
-    private func knownHomeItem(for itemID: String) -> JellyfinHomeItem? {
-        resumeItems.first(where: { $0.id == itemID })
+    private func knownHomeItem(
+        for itemID: String,
+        canUseBrowseContext: Bool
+    ) -> JellyfinHomeItem? {
+        let homeScopedItem =
+            resumeItems.first(where: { $0.id == itemID })
             ?? recentItems.first(where: { $0.id == itemID })
             ?? nextUpItems.first(where: { $0.id == itemID })
             ?? recommendedItems.first(where: { $0.id == itemID })
-            ?? items.first(where: { $0.id == itemID }).map(
-                JellyfinHomeItem.init(mediaItem:)
-            )
+        guard homeScopedItem == nil, canUseBrowseContext else {
+            return homeScopedItem
+        }
+
+        return items.first(where: { $0.id == itemID }).map(
+            JellyfinHomeItem.init(mediaItem:)
+        )
             ?? episodes.first(where: { $0.id == itemID }).map(
                 JellyfinHomeItem.init(episode:)
             )
     }
 
-    private func applyPlayedStateLocally(itemID: String, played: Bool) {
-        items = items.map { item in
-            guard item.id == itemID else { return item }
-            var updated = item
-            updated.userData = updatedPlayedUserData(
-                from: item.userData,
-                played: played
-            )
-            return updated
+    private func applyPlayedStateLocally(
+        itemID: String,
+        played: Bool,
+        accountID: UUID
+    ) {
+        let shouldUpdateBrowseContext = accountID == selectedAccountID
+        let shouldUpdateHomeContext = accountID == homeAccountID
+
+        if shouldUpdateBrowseContext {
+            items = items.map { item in
+                guard item.id == itemID else { return item }
+                var updated = item
+                updated.userData = updatedPlayedUserData(
+                    from: item.userData,
+                    played: played
+                )
+                return updated
+            }
         }
 
-        if var selectedItemOverrideCopy = selectedItemOverride,
+        if shouldUpdateBrowseContext,
+            var selectedItemOverrideCopy = selectedItemOverride,
             selectedItemOverrideCopy.id == itemID
         {
             let currentUserData = selectedItemOverrideCopy.userData
@@ -1062,40 +1266,94 @@ final class JellyfinStore: ObservableObject {
             selectedItemOverride = selectedItemOverrideCopy
         }
 
-        episodes = episodes.map { episode in
-            guard episode.id == itemID else { return episode }
-            var updated = episode
-            updated.userData = updatedPlayedUserData(
-                from: episode.userData,
-                played: played
-            )
-            return updated
+        if shouldUpdateBrowseContext {
+            episodes = episodes.map { episode in
+                guard episode.id == itemID else { return episode }
+                var updated = episode
+                updated.userData = updatedPlayedUserData(
+                    from: episode.userData,
+                    played: played
+                )
+                return updated
+            }
         }
 
-        resumeItems = updatedPlayedHomeSection(
-            resumeItems,
-            itemID: itemID,
-            played: played,
-            removeWhenPlayed: true
-        )
-        recentItems = updatedPlayedHomeSection(
-            recentItems,
-            itemID: itemID,
-            played: played,
-            removeWhenPlayed: false
-        )
-        nextUpItems = updatedPlayedHomeSection(
-            nextUpItems,
-            itemID: itemID,
-            played: played,
-            removeWhenPlayed: played
-        )
-        recommendedItems = updatedPlayedHomeSection(
-            recommendedItems,
-            itemID: itemID,
-            played: played,
-            removeWhenPlayed: false
-        )
+        if shouldUpdateHomeContext {
+            resumeItems = updatedPlayedHomeSection(
+                resumeItems,
+                itemID: itemID,
+                played: played,
+                removeWhenPlayed: true
+            )
+            recentItems = updatedPlayedHomeSection(
+                recentItems,
+                itemID: itemID,
+                played: played,
+                removeWhenPlayed: false
+            )
+            nextUpItems = updatedPlayedHomeSection(
+                nextUpItems,
+                itemID: itemID,
+                played: played,
+                removeWhenPlayed: played
+            )
+            recommendedItems = updatedPlayedHomeSection(
+                recommendedItems,
+                itemID: itemID,
+                played: played,
+                removeWhenPlayed: false
+            )
+        }
+    }
+
+    private func resolveRemoteEpisodeNeighbors(
+        for episode: JellyfinEpisode,
+        accountID: UUID,
+        preferredEpisodes: [JellyfinEpisode]? = nil
+    ) async {
+        previousRemoteEpisode = nil
+        nextRemoteEpisode = nil
+
+        if let preferredEpisodes,
+            let index = preferredEpisodes.firstIndex(where: {
+                $0.id == episode.id
+            }
+            )
+        {
+            if index > 0 {
+                previousRemoteEpisode = preferredEpisodes[index - 1]
+            }
+            if preferredEpisodes.indices.contains(index + 1) {
+                nextRemoteEpisode = preferredEpisodes[index + 1]
+            }
+        }
+
+        if previousRemoteEpisode != nil && nextRemoteEpisode != nil {
+            return
+        }
+
+        do {
+            let adjacentEpisodes = try await client.loadAdjacentEpisodes(
+                accountID: accountID,
+                episodeID: episode.id
+            )
+            if let currentIndex = adjacentEpisodes.firstIndex(where: {
+                $0.id == episode.id
+            }) {
+                if previousRemoteEpisode == nil, currentIndex > 0 {
+                    previousRemoteEpisode = adjacentEpisodes[currentIndex - 1]
+                }
+                if nextRemoteEpisode == nil,
+                    adjacentEpisodes.indices.contains(currentIndex + 1)
+                {
+                    nextRemoteEpisode = adjacentEpisodes[currentIndex + 1]
+                }
+            }
+            let snapshot = await client.snapshot()
+            applySnapshot(snapshot)
+        } catch {
+            // Keep season-local navigation if adjacent lookup fails.
+        }
     }
 
     private func updatedPlayedHomeSection(
@@ -1144,52 +1402,5 @@ final class JellyfinStore: ObservableObject {
             finished ? 0 : positionSeconds * 10_000_000.0
         updated.lastPlayedDate = playedAt
         return updated
-    }
-
-    private func resolveRemoteEpisodeNeighbors(for episode: JellyfinEpisode)
-        async
-    {
-        previousRemoteEpisode = nil
-        nextRemoteEpisode = nil
-
-        if let index = episodes.firstIndex(where: { $0.id == episode.id }) {
-            if index > 0 {
-                previousRemoteEpisode = episodes[index - 1]
-            }
-            if episodes.indices.contains(index + 1) {
-                nextRemoteEpisode = episodes[index + 1]
-            }
-        }
-
-        if previousRemoteEpisode != nil && nextRemoteEpisode != nil {
-            return
-        }
-
-        guard let accountID = selectedAccountID else {
-            return
-        }
-
-        do {
-            let adjacentEpisodes = try await client.loadAdjacentEpisodes(
-                accountID: accountID,
-                episodeID: episode.id
-            )
-            if let currentIndex = adjacentEpisodes.firstIndex(where: {
-                $0.id == episode.id
-            }) {
-                if previousRemoteEpisode == nil, currentIndex > 0 {
-                    previousRemoteEpisode = adjacentEpisodes[currentIndex - 1]
-                }
-                if nextRemoteEpisode == nil,
-                    adjacentEpisodes.indices.contains(currentIndex + 1)
-                {
-                    nextRemoteEpisode = adjacentEpisodes[currentIndex + 1]
-                }
-            }
-            let snapshot = await client.snapshot()
-            applySnapshot(snapshot)
-        } catch {
-            // Keep season-local navigation if adjacent lookup fails.
-        }
     }
 }
