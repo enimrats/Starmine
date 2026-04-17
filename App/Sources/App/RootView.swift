@@ -52,6 +52,8 @@ struct RootView: View {
         @State private var pendingVideoFullscreenEntry = false
         @State private var videoFullscreenOwnsWindowFullscreen = false
         @State private var macDanmakuSheetPresented = false
+        @State private var isPresentingMacVideoOpenPanel = false
+        @State private var isPresentingMacSubtitleOpenPanel = false
         @State private var splitViewVisibilityBeforeVideoFullscreen:
             NavigationSplitViewVisibility?
     #endif
@@ -59,6 +61,11 @@ struct RootView: View {
     private var playback: PlaybackStore { coordinator.playback }
     private var danmaku: DanmakuFeatureStore { coordinator.danmaku }
     private var jellyfin: JellyfinStore { coordinator.jellyfin }
+    private var videoImportTypes: [UTType] {
+        [
+            .movie, .video, .mpeg4Movie, .quickTimeMovie,
+        ]
+    }
     private var subtitleImportTypes: [UTType] {
         [
             UTType(filenameExtension: "ass"),
@@ -71,40 +78,55 @@ struct RootView: View {
         .compactMap { $0 }
     }
 
+    @ViewBuilder
+    private var importAwareRootContent: some View {
+        #if os(macOS)
+            rootContent
+                .onChange(of: importerPresented) { presented in
+                    guard presented else { return }
+                    presentMacVideoOpenPanelIfNeeded()
+                }
+                .onChange(of: subtitleImporterPresented) { presented in
+                    guard presented else { return }
+                    presentMacSubtitleOpenPanelIfNeeded()
+                }
+        #else
+            rootContent
+                .fileImporter(
+                    isPresented: $importerPresented,
+                    allowedContentTypes: videoImportTypes,
+                    allowsMultipleSelection: false
+                ) { result in
+                    switch result {
+                    case let .success(urls):
+                        guard let url = urls.first else { return }
+                        coordinator.openVideo(url: url)
+                    case let .failure(error):
+                        coordinator.errorState = AppErrorState(
+                            message: error.localizedDescription
+                        )
+                    }
+                }
+                .fileImporter(
+                    isPresented: $subtitleImporterPresented,
+                    allowedContentTypes: subtitleImportTypes,
+                    allowsMultipleSelection: false
+                ) { result in
+                    switch result {
+                    case let .success(urls):
+                        guard let url = urls.first else { return }
+                        coordinator.addExternalSubtitle(url: url)
+                    case let .failure(error):
+                        coordinator.errorState = AppErrorState(
+                            message: error.localizedDescription
+                        )
+                    }
+                }
+        #endif
+    }
+
     var body: some View {
-        rootContent
-            .fileImporter(
-                isPresented: $importerPresented,
-                allowedContentTypes: [
-                    .movie, .video, .mpeg4Movie, .quickTimeMovie,
-                ],
-                allowsMultipleSelection: false
-            ) { result in
-                switch result {
-                case let .success(urls):
-                    guard let url = urls.first else { return }
-                    coordinator.openVideo(url: url)
-                case let .failure(error):
-                    coordinator.errorState = AppErrorState(
-                        message: error.localizedDescription
-                    )
-                }
-            }
-            .fileImporter(
-                isPresented: $subtitleImporterPresented,
-                allowedContentTypes: subtitleImportTypes,
-                allowsMultipleSelection: false
-            ) { result in
-                switch result {
-                case let .success(urls):
-                    guard let url = urls.first else { return }
-                    coordinator.addExternalSubtitle(url: url)
-                case let .failure(error):
-                    coordinator.errorState = AppErrorState(
-                        message: error.localizedDescription
-                    )
-                }
-            }
+        importAwareRootContent
             .alert(item: $coordinator.errorState) { errorState in
                 Alert(title: Text("请求失败"), message: Text(errorState.message))
             }
@@ -1894,6 +1916,76 @@ struct RootView: View {
     }
 
     #if os(macOS)
+        private func presentMacVideoOpenPanelIfNeeded() {
+            guard !isPresentingMacVideoOpenPanel else { return }
+            isPresentingMacVideoOpenPanel = true
+
+            Task { @MainActor in
+                defer {
+                    importerPresented = false
+                    isPresentingMacVideoOpenPanel = false
+                }
+
+                let panel = NSOpenPanel()
+                panel.title = "打开视频"
+                panel.message = "选择要播放的本地视频文件。"
+                panel.canChooseFiles = true
+                panel.canChooseDirectories = false
+                panel.allowsMultipleSelection = false
+                panel.allowedContentTypes = videoImportTypes
+
+                guard await presentMacOpenPanel(panel) == .OK,
+                    let url = panel.urls.first
+                else {
+                    return
+                }
+
+                coordinator.openVideo(url: url)
+            }
+        }
+
+        private func presentMacSubtitleOpenPanelIfNeeded() {
+            guard !isPresentingMacSubtitleOpenPanel else { return }
+            isPresentingMacSubtitleOpenPanel = true
+
+            Task { @MainActor in
+                defer {
+                    subtitleImporterPresented = false
+                    isPresentingMacSubtitleOpenPanel = false
+                }
+
+                let panel = NSOpenPanel()
+                panel.title = "挂载外挂字幕"
+                panel.message = "选择要加载的字幕文件。"
+                panel.canChooseFiles = true
+                panel.canChooseDirectories = false
+                panel.allowsMultipleSelection = false
+                panel.allowedContentTypes = subtitleImportTypes
+
+                guard await presentMacOpenPanel(panel) == .OK,
+                    let url = panel.urls.first
+                else {
+                    return
+                }
+
+                coordinator.addExternalSubtitle(url: url)
+            }
+        }
+
+        private func presentMacOpenPanel(_ panel: NSOpenPanel) async
+            -> NSApplication.ModalResponse
+        {
+            guard let window = NSApp.keyWindow ?? NSApp.mainWindow else {
+                return panel.runModal()
+            }
+
+            return await withCheckedContinuation { continuation in
+                panel.beginSheetModal(for: window) { response in
+                    continuation.resume(returning: response)
+                }
+            }
+        }
+
         private func updatePlaybackChrome(for phase: HoverPhase) {
             switch phase {
             case .active(_):
