@@ -51,6 +51,7 @@ struct RootView: View {
         @State private var isVideoFullscreen = false
         @State private var pendingVideoFullscreenEntry = false
         @State private var videoFullscreenOwnsWindowFullscreen = false
+        @State private var macDanmakuSheetPresented = false
         @State private var splitViewVisibilityBeforeVideoFullscreen:
             NavigationSplitViewVisibility?
     #endif
@@ -107,6 +108,11 @@ struct RootView: View {
             .alert(item: $coordinator.errorState) { errorState in
                 Alert(title: Text("请求失败"), message: Text(errorState.message))
             }
+            #if os(macOS)
+                .sheet(isPresented: $macDanmakuSheetPresented) {
+                    macDanmakuSheet
+                }
+            #endif
             .onReceive(playback.$snapshot.map(\.position).removeDuplicates()) {
                 newValue in
                 guard !isScrubbing else { return }
@@ -127,6 +133,7 @@ struct RootView: View {
                 if newValue == nil {
                     #if os(macOS)
                         dismissVideoFullscreenIfNeeded()
+                        macDanmakuSheetPresented = false
                     #else
                         setIOSVideoFullscreen(false)
                         mobileDanmakuSheetPresented = false
@@ -586,6 +593,49 @@ struct RootView: View {
             }
             .navigationSplitViewStyle(.balanced)
         }
+
+        private var macDanmakuSheet: some View {
+            NavigationStack {
+                ScrollView {
+                    if hasActivePlayback {
+                        DanmakuPanelView(
+                            coordinator: coordinator,
+                            playback: playback,
+                            danmaku: danmaku,
+                            prefersTouchLayout: false
+                        )
+                        .padding(24)
+                    } else {
+                        Text("开始播放后再替换弹幕。")
+                            .font(
+                                .system(
+                                    size: 15,
+                                    weight: .semibold,
+                                    design: .rounded
+                                )
+                            )
+                            .foregroundStyle(Palette.ink.opacity(0.6))
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(24)
+                    }
+                }
+                .background(Palette.sidebarBackground.ignoresSafeArea())
+                .navigationTitle("弹幕")
+                .toolbar {
+                    ToolbarItem(placement: .cancellationAction) {
+                        Button("关闭") {
+                            macDanmakuSheetPresented = false
+                        }
+                    }
+                }
+            }
+            .frame(
+                minWidth: 560,
+                idealWidth: 640,
+                minHeight: 620,
+                idealHeight: 760
+            )
+        }
     #endif
 
     private var detail: some View {
@@ -645,6 +695,15 @@ struct RootView: View {
                                 ? "text.bubble.fill" : "text.bubble"
                         )
                     }
+
+                    #if os(macOS)
+                        Button {
+                            showMacDanmakuSheet()
+                        } label: {
+                            Image(systemName: "slider.horizontal.3")
+                        }
+                        .disabled(!hasActivePlayback)
+                    #endif
 
                     #if os(macOS)
                         Button {
@@ -1245,6 +1304,10 @@ struct RootView: View {
             #endif
 
             #if os(macOS)
+                chromeButton(systemName: "slider.horizontal.3") {
+                    showMacDanmakuSheet()
+                }
+
                 chromeButton(
                     systemName: isVideoFullscreen
                         ? "arrow.down.right.and.arrow.up.left"
@@ -1452,6 +1515,13 @@ struct RootView: View {
         private func showMobileDanmakuSheet() {
             notePlaybackInteraction()
             mobileDanmakuSheetPresented = true
+        }
+    #endif
+
+    #if os(macOS)
+        private func showMacDanmakuSheet() {
+            notePlaybackInteraction()
+            macDanmakuSheetPresented = true
         }
     #endif
 
