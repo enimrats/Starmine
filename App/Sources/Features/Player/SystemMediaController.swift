@@ -35,6 +35,7 @@ final class SystemMediaController {
     private var canGoToPreviousTrack = false
     private var lastPublishedMetadata: Metadata?
     private var lastPublishedSnapshot = PlaybackSnapshot()
+    private var skipInterval = PlaybackPreferences.default.seekInterval
     #if os(iOS)
         private var audioSessionConfigured = false
         private var audioSessionActive = false
@@ -42,8 +43,7 @@ final class SystemMediaController {
 
     init() {
         configureRemoteCommands()
-        commandCenter.skipForwardCommand.preferredIntervals = [15]
-        commandCenter.skipBackwardCommand.preferredIntervals = [15]
+        updatePreferredSkipIntervals(skipInterval)
         commandCenter.stopCommand.isEnabled = false
         commandCenter.seekForwardCommand.isEnabled = false
         commandCenter.seekBackwardCommand.isEnabled = false
@@ -69,13 +69,18 @@ final class SystemMediaController {
         snapshot: PlaybackSnapshot,
         active: Bool,
         canGoToPrevious: Bool,
-        canGoToNext: Bool
+        canGoToNext: Bool,
+        skipInterval: Double
     ) {
         let activeChanged = self.active != active
         self.active = active
         latestSnapshot = snapshot
         canGoToPreviousTrack = canGoToPrevious
         canGoToNextTrack = canGoToNext
+        if self.skipInterval != skipInterval {
+            self.skipInterval = skipInterval
+            updatePreferredSkipIntervals(skipInterval)
+        }
         updateCommandAvailability()
 
         guard active else {
@@ -135,7 +140,8 @@ final class SystemMediaController {
                 return .noActionableNowPlayingItem
             }
             let interval =
-                (event as? MPSkipIntervalCommandEvent)?.interval ?? 15
+                (event as? MPSkipIntervalCommandEvent)?.interval
+                ?? self.skipInterval
             self.invokeOnMain { $0.onSkipForward?(interval) }
             return .success
         }
@@ -144,7 +150,8 @@ final class SystemMediaController {
                 return .noActionableNowPlayingItem
             }
             let interval =
-                (event as? MPSkipIntervalCommandEvent)?.interval ?? 15
+                (event as? MPSkipIntervalCommandEvent)?.interval
+                ?? self.skipInterval
             self.invokeOnMain { $0.onSkipBackward?(interval) }
             return .success
         }
@@ -202,6 +209,10 @@ final class SystemMediaController {
         {
             return true
         }
+        if abs(snapshot.playbackRate - lastPublishedSnapshot.playbackRate) > 0.01
+        {
+            return true
+        }
         if abs(snapshot.duration - lastPublishedSnapshot.duration) >= 0.5 {
             return true
         }
@@ -235,7 +246,7 @@ final class SystemMediaController {
             snapshot.position
         nowPlayingInfo[MPMediaItemPropertyPlaybackDuration] = snapshot.duration
         nowPlayingInfo[MPNowPlayingInfoPropertyPlaybackRate] =
-            snapshot.loaded && !snapshot.paused ? 1.0 : 0.0
+            snapshot.loaded && !snapshot.paused ? snapshot.playbackRate : 0.0
 
         if snapshot.duration > 0 {
             let progress = min(max(snapshot.position / snapshot.duration, 0), 1)
@@ -262,6 +273,12 @@ final class SystemMediaController {
         lastPublishedMetadata = nil
         lastPublishedSnapshot = PlaybackSnapshot()
         updateAudioSession(active: false)
+    }
+
+    private func updatePreferredSkipIntervals(_ interval: Double) {
+        let preferredInterval = NSNumber(value: max(1, interval.rounded()))
+        commandCenter.skipForwardCommand.preferredIntervals = [preferredInterval]
+        commandCenter.skipBackwardCommand.preferredIntervals = [preferredInterval]
     }
 
     private func setOptionalValue(

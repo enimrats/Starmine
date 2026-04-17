@@ -23,6 +23,7 @@ final class MPVPlayerController {
     private var initialized = false
     private var lastTrackState = PlayerTrackState()
     private var needsTrackRefresh = true
+    private var desiredPlaybackRate = 1.0
 
     deinit {
         queue.sync {
@@ -77,6 +78,15 @@ final class MPVPlayerController {
     func pause() {
         queue.async {
             self.setFlagPropertyLocked(name: "pause", value: true)
+        }
+    }
+
+    func setPlaybackRate(_ rate: Double) {
+        queue.async {
+            let clampedRate = PlaybackPreferences.clampedPlaybackRate(rate)
+            self.desiredPlaybackRate = clampedRate
+            guard self.initialized else { return }
+            self.setDoublePropertyLocked(name: "speed", value: clampedRate)
         }
     }
 
@@ -162,6 +172,7 @@ final class MPVPlayerController {
         mpv_set_option_string(context, "video-pan-y", "0")
         mpv_set_option_string(context, "hwdec", "videotoolbox")
         mpv_set_option_string(context, "hwdec-software-fallback", "60")
+        mpv_set_option_string(context, "audio-pitch-correction", "yes")
         mpv_set_option_string(context, "video-sync", "display-resample")
         mpv_set_option_string(context, "interpolation", "yes")
         mpv_set_option_string(context, "tscale", "oversample")
@@ -194,6 +205,7 @@ final class MPVPlayerController {
         }
 
         initialized = true
+        setDoublePropertyLocked(name: "speed", value: desiredPlaybackRate)
         mpv_observe_property(context, 0, "time-pos", MPV_FORMAT_DOUBLE)
         mpv_observe_property(context, 0, "duration", MPV_FORMAT_DOUBLE)
         mpv_observe_property(context, 0, "pause", MPV_FORMAT_FLAG)
@@ -228,6 +240,7 @@ final class MPVPlayerController {
             duration: doublePropertyLocked(name: "duration"),
             paused: flagPropertyLocked(name: "pause"),
             loaded: stringPropertyLocked(name: "path") != nil,
+            playbackRate: doublePropertyLocked(name: "speed"),
             videoWidth: Int(
                 intPropertyLocked(name: "video-out-params/dw")
                     ?? intPropertyLocked(name: "width") ?? 0
@@ -336,6 +349,12 @@ final class MPVPlayerController {
         guard let mpv else { return }
         var mutable = value
         mpv_set_property(mpv, name, MPV_FORMAT_INT64, &mutable)
+    }
+
+    private func setDoublePropertyLocked(name: String, value: Double) {
+        guard let mpv else { return }
+        var mutable = value
+        mpv_set_property(mpv, name, MPV_FORMAT_DOUBLE, &mutable)
     }
 
     private func setTrackSelectionLocked(name: String, value: Int64?) {

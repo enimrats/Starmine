@@ -37,10 +37,13 @@ struct RootView: View {
     @State private var playbackIsRemote = false
     @State private var playbackPaused = true
     @State private var playbackVideoAspect = 0.0
+    @State private var playbackPreferences = PlaybackPreferences.default
     @State private var selectedAudioTrackTitle: String?
     @State private var selectedSubtitleTrackTitle: String?
     @State private var lastPlaybackSurfaceSize: CGSize = .zero
     @State private var playbackHostRemountTask: Task<Void, Never>?
+    @State private var surfaceScrubStartPosition: Double?
+    @State private var surfaceLongPressSpeedActive = false
     #if !os(macOS)
         @State private var mobileTab: MobileRootTab = .home
         @State private var isIOSVideoFullscreen = false
@@ -151,6 +154,7 @@ struct RootView: View {
                 hasActivePlayback = newValue != nil
                 // Ignore repeated current-value emissions when SwiftUI rebuilds the view.
                 guard previousValue != newValue else { return }
+                resetSurfaceInteractionState(resetPlaybackRate: true)
                 clearPendingSeek(syncTo: 0)
                 if newValue == nil {
                     #if os(macOS)
@@ -196,6 +200,9 @@ struct RootView: View {
             .onReceive(playback.$isPlayingRemote.removeDuplicates()) {
                 newValue in
                 playbackIsRemote = newValue
+            }
+            .onReceive(playback.$preferences.removeDuplicates()) { newValue in
+                playbackPreferences = newValue
             }
             #if !os(macOS)
                 .onAppear {
@@ -303,6 +310,7 @@ struct RootView: View {
                 }
             #endif
             .onDisappear {
+                resetSurfaceInteractionState(resetPlaybackRate: true)
                 cancelPlaybackChromeAutoHide()
                 pendingSeekResetTask?.cancel()
                 pendingSeekResetTask = nil
@@ -327,6 +335,20 @@ struct RootView: View {
                         onToggleFullscreen: {
                             guard hasActivePlayback else { return }
                             toggleVideoFullscreen()
+                        },
+                        onSeekBackward: {
+                            guard hasActivePlayback else { return }
+                            beginOptimisticSeek(
+                                to: displayedPlaybackPosition
+                                    - playbackPreferences.seekInterval
+                            )
+                        },
+                        onSeekForward: {
+                            guard hasActivePlayback else { return }
+                            beginOptimisticSeek(
+                                to: displayedPlaybackPosition
+                                    + playbackPreferences.seekInterval
+                            )
                         },
                         onWindowWillClose: {
                             coordinator.handleWindowClosing()
@@ -794,6 +816,41 @@ struct RootView: View {
                     .allowsHitTesting(false)
             }
 
+            #if !os(macOS)
+                PlaybackTouchGestureSurface(
+                    onSingleTap: {
+                        handlePlaybackSurfaceTap()
+                    },
+                    onDoubleTap: { isLeadingHalf in
+                        handlePlaybackSurfaceDoubleTap(
+                            isLeadingHalf: isLeadingHalf
+                        )
+                    },
+                    onHorizontalPanBegan: {
+                        beginPlaybackSurfaceScrub()
+                    },
+                    onHorizontalPanChanged: { translationX, width in
+                        updatePlaybackSurfaceScrub(
+                            translationX: translationX,
+                            width: width
+                        )
+                    },
+                    onHorizontalPanEnded: { translationX, width in
+                        endPlaybackSurfaceScrub(
+                            translationX: translationX,
+                            width: width
+                        )
+                    },
+                    onLongPressBegan: {
+                        setSurfaceLongPressPlaybackRate(active: true)
+                    },
+                    onLongPressEnded: {
+                        setSurfaceLongPressPlaybackRate(active: false)
+                    }
+                )
+                .frame(width: surfaceSize.width, height: surfaceSize.height)
+            #endif
+
             playbackChromeOverlay(
                 in: surfaceSize,
                 videoRect: videoRect,
@@ -831,10 +888,6 @@ struct RootView: View {
         #if os(macOS)
             .onTapGesture(count: 2) {
                 toggleVideoFullscreen()
-            }
-        #else
-            .onTapGesture {
-                handlePlaybackSurfaceTap()
             }
         #endif
     }
@@ -1108,6 +1161,9 @@ struct RootView: View {
                     if let selectedSubtitleTrackTitle {
                         PillLabel(text: selectedSubtitleTrackTitle)
                     }
+                    if abs(currentPlaybackRate - 1.0) > 0.01 {
+                        PillLabel(text: playbackRateText(currentPlaybackRate))
+                    }
                     if danmaku.isLoadingDanmaku {
                         ProgressView()
                             .tint(.white)
@@ -1146,15 +1202,22 @@ struct RootView: View {
             isImmersive: isImmersive
         )
 
-        VStack(spacing: 0) {
-            topOverlay
-            Spacer()
-            controls(width: chromeRect.width)
+        ZStack {
+            VStack(spacing: 0) {
+                topOverlay
+                Spacer()
+            }
+            .allowsHitTesting(false)
+
+            VStack(spacing: 0) {
+                Spacer()
+                controls(width: chromeRect.width)
+            }
+            .allowsHitTesting(showsPlaybackChrome)
         }
         .frame(width: chromeRect.width, height: chromeRect.height)
         .offset(x: chromeRect.origin.x, y: chromeRect.origin.y)
         .opacity(showsPlaybackChrome ? 1 : 0)
-        .allowsHitTesting(showsPlaybackChrome)
         .animation(.easeInOut(duration: 0.18), value: showsPlaybackChrome)
     }
 
@@ -1276,14 +1339,20 @@ struct RootView: View {
                 notePlaybackInteraction()
                 coordinator.playNextEpisode()
             }
-            chromeButton(systemName: "gobackward.10") {
-                beginOptimisticSeek(to: displayedPlaybackPosition - 10)
+            chromeButton(systemName: "gobackward") {
+                beginOptimisticSeek(
+                    to: displayedPlaybackPosition - playbackPreferences.seekInterval
+                )
             }
-            chromeButton(systemName: "goforward.10") {
-                beginOptimisticSeek(to: displayedPlaybackPosition + 10)
+            chromeButton(systemName: "goforward") {
+                beginOptimisticSeek(
+                    to: displayedPlaybackPosition + playbackPreferences.seekInterval
+                )
             }
 
             regularPlaybackTimeLabels(width: width)
+
+            playbackSettingsMenu
 
             Spacer(minLength: 12)
 
@@ -1359,9 +1428,6 @@ struct RootView: View {
                         notePlaybackInteraction()
                         coordinator.playPreviousEpisode()
                     }
-                    chromeButton(systemName: "gobackward.10", size: 32) {
-                        beginOptimisticSeek(to: displayedPlaybackPosition - 10)
-                    }
                     chromeButton(
                         systemName: playback.snapshot.paused
                             ? "play.fill" : "pause.fill",
@@ -1371,8 +1437,17 @@ struct RootView: View {
                         notePlaybackInteraction()
                         coordinator.togglePause()
                     }
-                    chromeButton(systemName: "goforward.10", size: 32) {
-                        beginOptimisticSeek(to: displayedPlaybackPosition + 10)
+                    chromeButton(systemName: "gobackward", size: 32) {
+                        beginOptimisticSeek(
+                            to: displayedPlaybackPosition
+                                - playbackPreferences.seekInterval
+                        )
+                    }
+                    chromeButton(systemName: "goforward", size: 32) {
+                        beginOptimisticSeek(
+                            to: displayedPlaybackPosition
+                                + playbackPreferences.seekInterval
+                        )
                     }
                     chromeButton(
                         systemName: "forward.end.fill",
@@ -1402,6 +1477,62 @@ struct RootView: View {
         #endif
     }
 
+    private var playbackSettingsMenu: some View {
+        Menu {
+            playbackSettingsMenuContent
+        } label: {
+            MenuChip(
+                title: playbackRateText(currentPlaybackRate),
+                systemImage: "speedometer"
+            )
+        }
+        .buttonStyle(.plain)
+    }
+
+    @ViewBuilder
+    private var playbackSettingsMenuContent: some View {
+        Section("播放") {
+            Menu {
+                ForEach(PlaybackPreferences.playbackRatePresets, id: \.self) {
+                    rate in
+                    playbackOptionMenuButton(
+                        title: playbackRateText(rate),
+                        isSelected: abs(playbackPreferences.playbackRate - rate)
+                            < 0.01
+                    ) {
+                        notePlaybackInteraction()
+                        playback.setPlaybackRate(rate)
+                    }
+                }
+            } label: {
+                Label(
+                    "倍速 \(playbackRateText(currentPlaybackRate))",
+                    systemImage: "speedometer"
+                )
+            }
+
+            Menu {
+                ForEach(PlaybackPreferences.seekIntervalPresets, id: \.self) {
+                    interval in
+                    playbackOptionMenuButton(
+                        title: seekIntervalText(interval),
+                        isSelected:
+                            abs(playbackPreferences.seekInterval - interval)
+                            < 0.01
+                    ) {
+                        notePlaybackInteraction()
+                        playback.setSeekInterval(interval)
+                    }
+                }
+            } label: {
+                Label(
+                    "快进快退 \(seekIntervalText(playbackPreferences.seekInterval))",
+                    systemImage: "arrow.left.and.right"
+                )
+            }
+        }
+    }
+
     @ViewBuilder
     private var compactPlaybackActionsMenu: some View {
         #if !os(macOS)
@@ -1424,6 +1555,8 @@ struct RootView: View {
                         )
                     }
                 }
+
+                playbackSettingsMenuContent
 
                 Section("音轨与字幕") {
                     Menu {
@@ -1636,6 +1769,7 @@ struct RootView: View {
                 systemImage: "captions.bubble"
             )
         }
+        .buttonStyle(.plain)
     }
 
     private func trackMenu(
@@ -1670,6 +1804,7 @@ struct RootView: View {
             MenuChip(title: title, systemImage: systemImage)
                 .opacity(tracks.isEmpty && !includeOffOption ? 0.55 : 1)
         }
+        .buttonStyle(.plain)
         .disabled(tracks.isEmpty && !includeOffOption)
     }
 
@@ -1689,6 +1824,22 @@ struct RootView: View {
                             .foregroundStyle(.secondary)
                     }
                 }
+                Spacer()
+                if isSelected {
+                    Image(systemName: "checkmark")
+                }
+            }
+        }
+    }
+
+    private func playbackOptionMenuButton(
+        title: String,
+        isSelected: Bool,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            HStack(spacing: 10) {
+                Text(title)
                 Spacer()
                 if isSelected {
                     Image(systemName: "checkmark")
@@ -1747,6 +1898,13 @@ struct RootView: View {
             .foregroundStyle(.white.opacity(0.62))
     }
 
+    private var currentPlaybackRate: Double {
+        let rate = playback.snapshot.loaded
+            ? playback.snapshot.playbackRate
+            : playbackPreferences.playbackRate
+        return PlaybackPreferences.clampedPlaybackRate(rate)
+    }
+
     private func timeString(_ seconds: Double) -> String {
         guard seconds.isFinite, seconds > 0 else { return "00:00" }
         let total = Int(seconds.rounded())
@@ -1757,6 +1915,26 @@ struct RootView: View {
             return String(format: "%d:%02d:%02d", hours, minutes, secs)
         }
         return String(format: "%02d:%02d", minutes, secs)
+    }
+
+    private func playbackRateText(_ rate: Double) -> String {
+        "\(formattedPlaybackValue(rate))x"
+    }
+
+    private func seekIntervalText(_ seconds: Double) -> String {
+        "\(formattedPlaybackValue(seconds)) 秒"
+    }
+
+    private func formattedPlaybackValue(_ value: Double) -> String {
+        guard value.isFinite else { return "0" }
+        var text = String(format: "%.2f", value)
+        while text.contains(".") && text.last == "0" {
+            text.removeLast()
+        }
+        if text.last == "." {
+            text.removeLast()
+        }
+        return text
     }
 
     private var showsPlaybackChrome: Bool {
@@ -1863,6 +2041,95 @@ struct RootView: View {
         let lowerBound = max(0, seconds)
         guard playback.snapshot.duration > 0 else { return lowerBound }
         return min(playback.snapshot.duration, lowerBound)
+    }
+
+    private func resetSurfaceInteractionState(resetPlaybackRate: Bool) {
+        surfaceScrubStartPosition = nil
+        if isScrubbing {
+            isScrubbing = false
+        }
+        if resetPlaybackRate && surfaceLongPressSpeedActive {
+            surfaceLongPressSpeedActive = false
+            playback.setPlaybackRate(1.0)
+        } else if !resetPlaybackRate {
+            surfaceLongPressSpeedActive = false
+        }
+    }
+
+    private func beginPlaybackSurfaceScrub() {
+        guard playback.snapshot.duration > 0 else { return }
+        let position = displayedPlaybackPosition
+        surfaceScrubStartPosition = position
+        clearPendingSeek(syncTo: position)
+        scrubPosition = position
+        isScrubbing = true
+        showPlaybackChrome()
+    }
+
+    private func updatePlaybackSurfaceScrub(
+        translationX: CGFloat,
+        width: CGFloat
+    ) {
+        guard let target = playbackSurfaceScrubTarget(
+            translationX: translationX,
+            width: width
+        )
+        else {
+            return
+        }
+        scrubPosition = target
+    }
+
+    private func endPlaybackSurfaceScrub(
+        translationX: CGFloat,
+        width: CGFloat
+    ) {
+        defer {
+            surfaceScrubStartPosition = nil
+        }
+        guard let target = playbackSurfaceScrubTarget(
+            translationX: translationX,
+            width: width
+        )
+        else {
+            clearPendingSeek(syncTo: playback.snapshot.position)
+            isScrubbing = false
+            return
+        }
+        beginOptimisticSeek(to: target)
+    }
+
+    private func playbackSurfaceScrubTarget(
+        translationX: CGFloat,
+        width: CGFloat
+    ) -> Double? {
+        guard playback.snapshot.duration > 0, width > 1 else { return nil }
+        let anchorPosition = surfaceScrubStartPosition ?? displayedPlaybackPosition
+        let progressDelta = Double(translationX / width)
+        let deltaSeconds = progressDelta * playback.snapshot.duration
+        return clampedSeekPosition(anchorPosition + deltaSeconds)
+    }
+
+    private func handlePlaybackSurfaceDoubleTap(isLeadingHalf: Bool) {
+        let direction = isLeadingHalf ? -1.0 : 1.0
+        showPlaybackChrome()
+        beginOptimisticSeek(
+            to: displayedPlaybackPosition
+                + direction * playbackPreferences.seekInterval
+        )
+    }
+
+    private func setSurfaceLongPressPlaybackRate(active: Bool) {
+        guard surfaceLongPressSpeedActive != active else { return }
+        surfaceLongPressSpeedActive = active
+        if active {
+            showPlaybackChrome()
+            playback.setPlaybackRate(2.0)
+        } else {
+            playback.setPlaybackRate(1.0)
+            showPlaybackChrome()
+            schedulePlaybackChromeAutoHide()
+        }
     }
 
     private func handlePlaybackSurfaceSizeChange(_ size: CGSize) {

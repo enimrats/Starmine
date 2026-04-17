@@ -3,6 +3,9 @@ import Foundation
 
 @MainActor
 final class PlaybackStore: ObservableObject {
+    private static let preferencesDefaultsKey =
+        "starmine.playback.preferences.v1"
+
     @Published var snapshot = PlaybackSnapshot()
     @Published private(set) var timebase = PlaybackTimebase()
     @Published var currentVideoURL: URL?
@@ -18,6 +21,17 @@ final class PlaybackStore: ObservableObject {
     @Published var isPlayingRemote = false
     @Published var canPlayPreviousEpisode = false
     @Published var canPlayNextEpisode = false
+    @Published var preferences: PlaybackPreferences {
+        didSet {
+            let clampedPreferences = preferences.clamped()
+            if clampedPreferences != preferences {
+                preferences = clampedPreferences
+                return
+            }
+            persistPreferences()
+            applyPreferences()
+        }
+    }
 
     let player = MPVPlayerController()
 
@@ -26,10 +40,15 @@ final class PlaybackStore: ObservableObject {
     var onPreviousTrack: (() -> Void)?
 
     private let systemMediaController = SystemMediaController()
+    private let userDefaults: UserDefaults
     private var currentScopedURL: URL?
     private var currentScopedSubtitleURLs: [URL] = []
 
-    init() {
+    init(userDefaults: UserDefaults = .standard) {
+        let preferences = Self.loadPreferences(userDefaults: userDefaults)
+        self.preferences = preferences
+        self.userDefaults = userDefaults
+
         player.onSnapshot = { [weak self] snapshot in
             guard let self else { return }
             let now = Date()
@@ -82,6 +101,7 @@ final class PlaybackStore: ObservableObject {
         systemMediaController.onPreviousTrack = { [weak self] in
             self?.onPreviousTrack?()
         }
+        applyPreferences()
         refreshSystemMediaState()
     }
 
@@ -214,6 +234,14 @@ final class PlaybackStore: ObservableObject {
         player.seek(to: seconds)
     }
 
+    func setPlaybackRate(_ rate: Double) {
+        preferences.playbackRate = rate
+    }
+
+    func setSeekInterval(_ seconds: Double) {
+        preferences.seekInterval = seconds
+    }
+
     func selectAudioTrack(id: Int64) {
         selectedAudioTrackID = id
         player.selectAudioTrack(id: id)
@@ -286,7 +314,35 @@ final class PlaybackStore: ObservableObject {
             snapshot: snapshot,
             active: currentVideoURL != nil,
             canGoToPrevious: canPlayPreviousEpisode,
-            canGoToNext: canPlayNextEpisode
+            canGoToNext: canPlayNextEpisode,
+            skipInterval: preferences.seekInterval
         )
+    }
+
+    private func applyPreferences() {
+        player.setPlaybackRate(preferences.playbackRate)
+        refreshSystemMediaState()
+    }
+
+    private func persistPreferences() {
+        let encoder = JSONEncoder()
+        guard let data = try? encoder.encode(preferences) else { return }
+        userDefaults.set(data, forKey: Self.preferencesDefaultsKey)
+    }
+
+    private static func loadPreferences(userDefaults: UserDefaults)
+        -> PlaybackPreferences
+    {
+        guard
+            let data = userDefaults.data(forKey: Self.preferencesDefaultsKey),
+            let preferences = try? JSONDecoder().decode(
+                PlaybackPreferences.self,
+                from: data
+            )
+        else {
+            return .default
+        }
+
+        return preferences.clamped()
     }
 }

@@ -24,11 +24,42 @@ struct PlayerTrackState: Equatable {
     var selectedSubtitleID: Int64?
 }
 
+struct PlaybackPreferences: Codable, Equatable {
+    static let `default` = PlaybackPreferences()
+    static let playbackRatePresets: [Double] = [
+        0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0,
+    ]
+    static let seekIntervalPresets: [Double] = [
+        5, 10, 15, 30, 60,
+    ]
+
+    var playbackRate: Double = 1.0
+    var seekInterval: Double = 10.0
+
+    func clamped() -> PlaybackPreferences {
+        PlaybackPreferences(
+            playbackRate: PlaybackPreferences.clampedPlaybackRate(playbackRate),
+            seekInterval: PlaybackPreferences.clampedSeekInterval(seekInterval)
+        )
+    }
+
+    static func clampedPlaybackRate(_ value: Double) -> Double {
+        guard value.isFinite else { return 1.0 }
+        return min(3.0, max(0.25, value))
+    }
+
+    static func clampedSeekInterval(_ value: Double) -> Double {
+        guard value.isFinite else { return 10.0 }
+        return min(600.0, max(1.0, value))
+    }
+}
+
 struct PlaybackSnapshot: Equatable {
     var position: Double = 0
     var duration: Double = 0
     var paused: Bool = true
     var loaded: Bool = false
+    var playbackRate: Double = 1.0
     var videoWidth: Int = 0
     var videoHeight: Int = 0
 
@@ -48,6 +79,7 @@ struct PlaybackTimebase: Equatable {
     var duration: Double = 0
     var paused: Bool = true
     var loaded: Bool = false
+    var playbackRate: Double = 1.0
     var updatedAt: Date = .distantPast
 
     init(
@@ -55,12 +87,14 @@ struct PlaybackTimebase: Equatable {
         duration: Double = 0,
         paused: Bool = true,
         loaded: Bool = false,
+        playbackRate: Double = 1.0,
         updatedAt: Date = .distantPast
     ) {
         self.position = position
         self.duration = duration
         self.paused = paused
         self.loaded = loaded
+        self.playbackRate = playbackRate
         self.updatedAt = updatedAt
     }
 
@@ -70,6 +104,7 @@ struct PlaybackTimebase: Equatable {
             duration: snapshot.duration,
             paused: snapshot.paused,
             loaded: snapshot.loaded,
+            playbackRate: snapshot.playbackRate,
             updatedAt: updatedAt
         )
     }
@@ -79,7 +114,7 @@ struct PlaybackTimebase: Equatable {
         guard !paused else { return bounded(position) }
 
         let elapsed = max(0, date.timeIntervalSince(updatedAt))
-        return bounded(position + elapsed)
+        return bounded(position + elapsed * playbackRate)
     }
 
     static func reconciled(
@@ -112,6 +147,7 @@ struct PlaybackTimebase: Equatable {
             duration: snapshot.duration,
             paused: snapshot.paused,
             loaded: snapshot.loaded,
+            playbackRate: snapshot.playbackRate,
             updatedAt: date
         )
     }
