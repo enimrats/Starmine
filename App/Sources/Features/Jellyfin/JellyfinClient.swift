@@ -34,6 +34,8 @@ protocol JellyfinClientProtocol {
         -> [JellyfinHomeItem]
     func loadRecommendedItems(accountID: UUID, limit: Int) async throws
         -> [JellyfinHomeItem]
+    func loadUserData(accountID: UUID, itemID: String) async throws
+        -> JellyfinUserData
     func createPlaybackSession(
         accountID: UUID,
         itemID: String,
@@ -468,6 +470,21 @@ actor JellyfinClient: JellyfinClientProtocol {
         )
     }
 
+    func loadUserData(accountID: UUID, itemID: String) async throws
+        -> JellyfinUserData
+    {
+        let userID = try userID(for: accountID)
+        let response = try await authenticatedRequest(
+            accountID: accountID,
+            path: "/Users/\(userID)/Items/\(itemID)?Fields=UserData"
+        )
+        let payload = try jsonObject(data: response.data)
+        return payload.dictionary("UserData").map(
+            JellyfinUserData.init(payload:)
+        )
+            ?? JellyfinUserData()
+    }
+
     func createPlaybackSession(
         accountID: UUID,
         itemID: String,
@@ -487,9 +504,20 @@ actor JellyfinClient: JellyfinClientProtocol {
             ].compactMapValues { $0 }
         )
         let payload = try jsonObject(data: response.data)
-        let sources = payload.dictionaries("MediaSources").map(
-            JellyfinPlaybackMediaSource.init(payload:)
-        )
+        let sources = payload.dictionaries("MediaSources").map {
+            sourcePayload in
+            let source = JellyfinPlaybackMediaSource(payload: sourcePayload)
+            var resolvedSource = source
+            resolvedSource.subtitleStreams = source.subtitleStreams.map {
+                $0.resolving(
+                    baseURL: response.route.normalizedURL,
+                    accessToken: response.profile.accessToken,
+                    itemID: itemID,
+                    mediaSourceID: source.id
+                )
+            }
+            return resolvedSource
+        }
         let selectedSource =
             sources.first(where: { $0.id == mediaSourceID }) ?? sources.first
         let playSessionID = payload.string("PlaySessionId")
@@ -497,7 +525,8 @@ actor JellyfinClient: JellyfinClientProtocol {
         let streamURL =
             resolvePlaybackURL(
                 selectedSource?.directStreamPath,
-                baseURL: baseURL
+                baseURL: baseURL,
+                accessToken: response.profile.accessToken
             )
             ?? buildDirectPlayURL(
                 baseURL: baseURL,
@@ -842,14 +871,16 @@ actor JellyfinClient: JellyfinClientProtocol {
         return "\(base), Token=\"\(token)\""
     }
 
-    private func resolvePlaybackURL(_ rawPath: String?, baseURL: String) -> URL?
-    {
-        guard let rawPath = rawPath?.nilIfBlank else { return nil }
-        if rawPath.hasPrefix("http://") || rawPath.hasPrefix("https://") {
-            return URL(string: rawPath)
-        }
-        let normalizedPath = rawPath.hasPrefix("/") ? rawPath : "/\(rawPath)"
-        return URL(string: "\(baseURL)\(normalizedPath)")
+    private func resolvePlaybackURL(
+        _ rawPath: String?,
+        baseURL: String,
+        accessToken: String
+    ) -> URL? {
+        JellyfinURLTools.resolve(
+            rawPath,
+            baseURL: baseURL,
+            accessToken: accessToken
+        )
     }
 
     private func buildDirectPlayURL(

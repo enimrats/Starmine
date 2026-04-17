@@ -200,8 +200,8 @@ final class AppCoordinator: ObservableObject {
     }
 
     func openVideo(url: URL) {
-        finishRemotePlaybackIfNeeded(
-            finished: shouldTreatCurrentRemotePlaybackAsFinished()
+        finishJellyfinPlaybackIfNeeded(
+            finished: shouldTreatCurrentJellyfinPlaybackAsFinished()
         )
         playback.openLocalVideo(url)
         jellyfin.clearRemoteNavigation()
@@ -400,6 +400,12 @@ final class AppCoordinator: ObservableObject {
         }
     }
 
+    func playDownloadedJellyfinEntry(_ entry: JellyfinOfflineEntry) {
+        Task { [weak self] in
+            await self?.playDownloadedJellyfinEntryAsync(entry)
+        }
+    }
+
     func openJellyfinHomeItemInLibrary(_ item: JellyfinHomeItem) {
         Task { [weak self] in
             guard let self else { return }
@@ -460,19 +466,121 @@ final class AppCoordinator: ObservableObject {
         }
     }
 
+    func setDownloadedJellyfinEntryPlayedState(
+        _ entry: JellyfinOfflineEntry,
+        played: Bool
+    ) {
+        jellyfin.setOfflinePlayedState(entryID: entry.id, played: played)
+    }
+
+    func removeDownloadedJellyfinEntry(_ entry: JellyfinOfflineEntry) {
+        jellyfin.deleteOfflineEntry(entry.id)
+        syncJellyfinNavigation()
+    }
+
+    func syncDownloadedJellyfinEntries() {
+        Task { [weak self] in
+            await self?.jellyfin.syncOfflineEntriesIfPossible()
+        }
+    }
+
+    func resolveDownloadedJellyfinConflict(
+        _ entry: JellyfinOfflineEntry,
+        preferLocal: Bool
+    ) {
+        Task { [weak self] in
+            guard let self else { return }
+            do {
+                try await self.jellyfin.resolveOfflineConflict(
+                    entryID: entry.id,
+                    preferLocal: preferLocal
+                )
+            } catch {
+                self.handleError(error)
+            }
+        }
+    }
+
+    func downloadJellyfinMediaItem(_ item: JellyfinMediaItem) {
+        Task { [weak self] in
+            guard let self else { return }
+            do {
+                try await self.jellyfin.queueDownload(for: item)
+            } catch {
+                self.handleError(error)
+            }
+        }
+    }
+
+    func downloadJellyfinSeason(
+        _ season: JellyfinSeason,
+        in series: JellyfinMediaItem
+    ) {
+        Task { [weak self] in
+            guard let self else { return }
+            do {
+                try await self.jellyfin.queueDownload(for: season, in: series)
+            } catch {
+                self.handleError(error)
+            }
+        }
+    }
+
+    func downloadJellyfinEpisodes(
+        _ episodes: [JellyfinEpisode],
+        in series: JellyfinMediaItem,
+        season: JellyfinSeason?
+    ) {
+        Task { [weak self] in
+            guard let self else { return }
+            do {
+                try await self.jellyfin.queueDownload(
+                    for: episodes,
+                    in: series,
+                    season: season
+                )
+            } catch {
+                self.handleError(error)
+            }
+        }
+    }
+
+    func downloadJellyfinHomeItem(_ item: JellyfinHomeItem) {
+        Task { [weak self] in
+            guard let self else { return }
+            do {
+                try await self.jellyfin.queueDownload(for: item)
+            } catch {
+                self.handleError(error)
+            }
+        }
+    }
+
     func playPreviousEpisode() {
-        guard let episode = jellyfin.previousRemoteEpisode else { return }
-        playJellyfinEpisode(episode)
+        if playback.isPlayingRemote,
+            let episode = jellyfin.previousRemoteEpisode
+        {
+            playJellyfinEpisode(episode)
+            return
+        }
+        if let entry = jellyfin.previousOfflineEntry {
+            playDownloadedJellyfinEntry(entry)
+        }
     }
 
     func playNextEpisode() {
-        guard let episode = jellyfin.nextRemoteEpisode else { return }
-        playJellyfinEpisode(episode)
+        if playback.isPlayingRemote, let episode = jellyfin.nextRemoteEpisode {
+            playJellyfinEpisode(episode)
+            return
+        }
+        if let entry = jellyfin.nextOfflineEntry {
+            playDownloadedJellyfinEntry(entry)
+        }
     }
 
     func handleWindowClosing() {
-        finishRemotePlaybackIfNeeded(
-            finished: shouldTreatCurrentRemotePlaybackAsFinished()
+        finishJellyfinPlaybackIfNeeded(
+            finished: shouldTreatCurrentJellyfinPlaybackAsFinished()
         )
         playback.stopPlayback()
     }
@@ -550,10 +658,18 @@ final class AppCoordinator: ObservableObject {
         playback.selectSubtitleTrack(id: id)
     }
 
+    func addExternalSubtitle(url: URL) {
+        guard playback.currentVideoURL != nil else {
+            errorState = AppErrorState(message: "请先开始播放，再挂载外挂字幕。")
+            return
+        }
+        playback.addExternalSubtitle(url)
+    }
+
     private func playJellyfinMediaItemAsync(_ item: JellyfinMediaItem) async {
         do {
-            await stopRemotePlaybackIfNeeded(
-                finished: shouldTreatCurrentRemotePlaybackAsFinished()
+            await stopJellyfinPlaybackIfNeeded(
+                finished: shouldTreatCurrentJellyfinPlaybackAsFinished()
             )
             let candidate = try await jellyfin.makePlaybackCandidate(for: item)
             playback.beginRemotePlayback(
@@ -561,7 +677,10 @@ final class AppCoordinator: ObservableObject {
                 title: candidate.title,
                 episodeLabel: candidate.episodeLabel,
                 collectionTitle: candidate.collectionTitle,
-                resumePosition: candidate.resumePosition
+                resumePosition: candidate.resumePosition,
+                externalSubtitles: remoteExternalSubtitleURLs(
+                    for: candidate.session
+                )
             )
             await jellyfin.beginPlaybackTracking(
                 candidate: candidate,
@@ -586,8 +705,8 @@ final class AppCoordinator: ObservableObject {
 
     private func playJellyfinEpisodeAsync(_ episode: JellyfinEpisode) async {
         do {
-            await stopRemotePlaybackIfNeeded(
-                finished: shouldTreatCurrentRemotePlaybackAsFinished()
+            await stopJellyfinPlaybackIfNeeded(
+                finished: shouldTreatCurrentJellyfinPlaybackAsFinished()
             )
             let candidate = try await jellyfin.makePlaybackCandidate(
                 for: episode
@@ -597,7 +716,10 @@ final class AppCoordinator: ObservableObject {
                 title: candidate.title,
                 episodeLabel: candidate.episodeLabel,
                 collectionTitle: candidate.collectionTitle,
-                resumePosition: candidate.resumePosition
+                resumePosition: candidate.resumePosition,
+                externalSubtitles: remoteExternalSubtitleURLs(
+                    for: candidate.session
+                )
             )
             await jellyfin.beginPlaybackTracking(
                 candidate: candidate,
@@ -622,8 +744,8 @@ final class AppCoordinator: ObservableObject {
 
     private func playJellyfinHomeItemAsync(_ item: JellyfinHomeItem) async {
         do {
-            await stopRemotePlaybackIfNeeded(
-                finished: shouldTreatCurrentRemotePlaybackAsFinished()
+            await stopJellyfinPlaybackIfNeeded(
+                finished: shouldTreatCurrentJellyfinPlaybackAsFinished()
             )
             let candidate = try await jellyfin.makePlaybackCandidate(for: item)
             playback.beginRemotePlayback(
@@ -631,7 +753,10 @@ final class AppCoordinator: ObservableObject {
                 title: candidate.title,
                 episodeLabel: candidate.episodeLabel,
                 collectionTitle: candidate.collectionTitle,
-                resumePosition: candidate.resumePosition
+                resumePosition: candidate.resumePosition,
+                externalSubtitles: remoteExternalSubtitleURLs(
+                    for: candidate.session
+                )
             )
             await jellyfin.beginPlaybackTracking(
                 candidate: candidate,
@@ -654,6 +779,40 @@ final class AppCoordinator: ObservableObject {
         }
     }
 
+    private func playDownloadedJellyfinEntryAsync(_ entry: JellyfinOfflineEntry)
+        async
+    {
+        do {
+            await stopJellyfinPlaybackIfNeeded(
+                finished: shouldTreatCurrentJellyfinPlaybackAsFinished()
+            )
+            guard let videoURL = jellyfin.localVideoURL(for: entry) else {
+                throw JellyfinClientError.requestFailed("本地下载文件已丢失。")
+            }
+            playback.openLocalVideo(
+                videoURL,
+                title: entry.displayTitle,
+                episodeLabel: entry.episodeLabel,
+                collectionTitle: entry.collectionTitle,
+                externalSubtitles: jellyfin.localSubtitleURLs(for: entry)
+            )
+            jellyfin.beginOfflinePlaybackTracking(entry: entry)
+            danmaku.prepareSearch(
+                query: entry.seriesTitle ?? entry.title,
+                inferredSeasonNumber: entry.seasonNumber,
+                inferredSeasonEpisodeCount: nil,
+                inferredEpisodeNumber: entry.episodeNumber,
+                remoteSeriesID: entry.seriesID,
+                remoteSeasonID: entry.seasonID,
+                remoteEpisodeID: entry.remoteItemID
+            )
+            syncJellyfinNavigation()
+            await searchAndAutoloadDanmaku()
+        } catch {
+            handleError(error)
+        }
+    }
+
     private func syncDanmakuSelection(
         updatePlaybackLabel: Bool,
         matchingEpisode: AnimeEpisode?
@@ -664,6 +823,20 @@ final class AppCoordinator: ObservableObject {
         }
     }
 
+    private func remoteExternalSubtitleURLs(
+        for session: JellyfinPlaybackSession
+    ) -> [URL] {
+        let selectedSource =
+            session.mediaSources.first(where: {
+                $0.id == session.mediaSourceID
+            })
+            ?? session.mediaSources.first
+        return selectedSource?.subtitleStreams.compactMap { stream in
+            guard stream.isExternal else { return nil }
+            return stream.streamURL
+        } ?? []
+    }
+
     private func syncJellyfinNavigation() {
         playback.updateNavigation(
             previous: jellyfin.canPlayPreviousEpisode,
@@ -672,23 +845,42 @@ final class AppCoordinator: ObservableObject {
     }
 
     private func handleRemotePlaybackPulse() async {
-        guard playback.isPlayingRemote else { return }
+        if playback.isPlayingRemote {
+            if playback.snapshot.loaded {
+                jellyfin.markActivePlaybackLoaded()
+            } else if jellyfin.hasLoadedActivePlayback {
+                await stopJellyfinPlaybackIfNeeded(
+                    finished: shouldTreatCurrentJellyfinPlaybackAsFinished()
+                )
+                return
+            }
 
-        if playback.snapshot.loaded {
-            jellyfin.markActivePlaybackLoaded()
-        } else if jellyfin.hasLoadedActivePlayback {
-            await stopRemotePlaybackIfNeeded(
-                finished: shouldTreatCurrentRemotePlaybackAsFinished()
+            await jellyfin.reportActivePlaybackProgress(
+                positionSeconds: playback.timebase.resolvedPosition(at: Date()),
+                durationSeconds: max(
+                    playback.snapshot.duration,
+                    playback.timebase.duration
+                ),
+                isPaused: playback.snapshot.paused
             )
             return
         }
 
-        await jellyfin.reportActivePlaybackProgress(
-            positionSeconds: playback.timebase.resolvedPosition(at: Date()),
-            durationSeconds: max(
-                playback.snapshot.duration,
-                playback.timebase.duration
-            ),
+        guard jellyfin.hasActiveOfflinePlayback else { return }
+        if playback.snapshot.loaded {
+            jellyfin.markActiveOfflinePlaybackLoaded()
+        } else if jellyfin.hasLoadedActiveOfflinePlayback {
+            jellyfin.finishOfflinePlaybackTracking(
+                positionSeconds: resolvedOfflinePlaybackPosition(),
+                durationSeconds: resolvedOfflinePlaybackDuration(),
+                isPaused: playback.snapshot.paused,
+                finished: shouldTreatCurrentOfflinePlaybackAsFinished()
+            )
+            return
+        }
+        await jellyfin.reportActiveOfflinePlaybackProgress(
+            positionSeconds: resolvedOfflinePlaybackPosition(),
+            durationSeconds: resolvedOfflinePlaybackDuration(),
             isPaused: playback.snapshot.paused
         )
     }
@@ -712,6 +904,16 @@ final class AppCoordinator: ObservableObject {
         }
     }
 
+    private func finishOfflinePlaybackIfNeeded(finished: Bool) {
+        guard jellyfin.hasActiveOfflinePlayback else { return }
+        jellyfin.finishOfflinePlaybackTracking(
+            positionSeconds: resolvedOfflinePlaybackPosition(),
+            durationSeconds: resolvedOfflinePlaybackDuration(),
+            isPaused: playback.snapshot.paused,
+            finished: finished
+        )
+    }
+
     private func stopRemotePlaybackIfNeeded(finished: Bool) async {
         guard playback.isPlayingRemote else { return }
         await jellyfin.finishPlaybackTracking(
@@ -720,6 +922,16 @@ final class AppCoordinator: ObservableObject {
                 playback.snapshot.duration,
                 playback.timebase.duration
             ),
+            isPaused: playback.snapshot.paused,
+            finished: finished
+        )
+    }
+
+    private func stopOfflinePlaybackIfNeeded(finished: Bool) async {
+        guard jellyfin.hasActiveOfflinePlayback else { return }
+        jellyfin.finishOfflinePlaybackTracking(
+            positionSeconds: resolvedOfflinePlaybackPosition(),
+            durationSeconds: resolvedOfflinePlaybackDuration(),
             isPaused: playback.snapshot.paused,
             finished: finished
         )
@@ -736,6 +948,60 @@ final class AppCoordinator: ObservableObject {
 
         let position = playback.timebase.resolvedPosition(at: Date())
         return position >= max(duration - 30, duration * 0.92)
+    }
+
+    private func shouldTreatCurrentOfflinePlaybackAsFinished() -> Bool {
+        guard jellyfin.hasActiveOfflinePlayback else { return false }
+
+        let duration = resolvedOfflinePlaybackDuration()
+        guard duration > 0 else { return false }
+
+        let position = resolvedOfflinePlaybackPosition()
+        return position >= max(duration - 30, duration * 0.92)
+    }
+
+    private func resolvedOfflinePlaybackPosition() -> Double {
+        if playback.timebase.loaded {
+            return playback.timebase.resolvedPosition(at: Date())
+        }
+        return jellyfin.activeOfflineEntry?.localUserData
+            .playbackPositionSeconds
+            ?? 0
+    }
+
+    private func resolvedOfflinePlaybackDuration() -> Double {
+        let playbackDuration = max(
+            playback.snapshot.duration,
+            playback.timebase.duration
+        )
+        if playbackDuration > 0 {
+            return playbackDuration
+        }
+        guard let runTimeTicks = jellyfin.activeOfflineEntry?.runTimeTicks
+        else {
+            return 0
+        }
+        return runTimeTicks / 10_000_000.0
+    }
+
+    private func shouldTreatCurrentJellyfinPlaybackAsFinished() -> Bool {
+        if playback.isPlayingRemote {
+            return shouldTreatCurrentRemotePlaybackAsFinished()
+        }
+        if jellyfin.hasActiveOfflinePlayback {
+            return shouldTreatCurrentOfflinePlaybackAsFinished()
+        }
+        return false
+    }
+
+    private func finishJellyfinPlaybackIfNeeded(finished: Bool) {
+        finishRemotePlaybackIfNeeded(finished: finished)
+        finishOfflinePlaybackIfNeeded(finished: finished)
+    }
+
+    private func stopJellyfinPlaybackIfNeeded(finished: Bool) async {
+        await stopRemotePlaybackIfNeeded(finished: finished)
+        await stopOfflinePlaybackIfNeeded(finished: finished)
     }
 
     private func handleError(_ error: Error) {

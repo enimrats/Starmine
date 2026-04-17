@@ -19,6 +19,7 @@ struct RootView: View {
     @StateObject private var coordinator = AppCoordinator()
     @StateObject private var playbackHost = MPVVideoHostBridge()
     @State private var importerPresented = false
+    @State private var subtitleImporterPresented = false
     @State private var scrubPosition = 0.0
     @State private var isScrubbing = false
     @State private var pendingSeekPosition: Double?
@@ -57,6 +58,17 @@ struct RootView: View {
     private var playback: PlaybackStore { coordinator.playback }
     private var danmaku: DanmakuFeatureStore { coordinator.danmaku }
     private var jellyfin: JellyfinStore { coordinator.jellyfin }
+    private var subtitleImportTypes: [UTType] {
+        [
+            UTType(filenameExtension: "ass"),
+            UTType(filenameExtension: "ssa"),
+            UTType(filenameExtension: "srt"),
+            UTType(filenameExtension: "vtt"),
+            UTType(filenameExtension: "sub"),
+            UTType(filenameExtension: "ttml"),
+        ]
+        .compactMap { $0 }
+    }
 
     var body: some View {
         rootContent
@@ -71,6 +83,21 @@ struct RootView: View {
                 case let .success(urls):
                     guard let url = urls.first else { return }
                     coordinator.openVideo(url: url)
+                case let .failure(error):
+                    coordinator.errorState = AppErrorState(
+                        message: error.localizedDescription
+                    )
+                }
+            }
+            .fileImporter(
+                isPresented: $subtitleImporterPresented,
+                allowedContentTypes: subtitleImportTypes,
+                allowsMultipleSelection: false
+            ) { result in
+                switch result {
+                case let .success(urls):
+                    guard let url = urls.first else { return }
+                    coordinator.addExternalSubtitle(url: url)
                 case let .failure(error):
                     coordinator.errorState = AppErrorState(
                         message: error.localizedDescription
@@ -467,6 +494,12 @@ struct RootView: View {
                 ToolbarItemGroup(placement: .navigationBarTrailing) {
                     if hasActivePlayback {
                         Button {
+                            subtitleImporterPresented = true
+                        } label: {
+                            Image(systemName: "captions.bubble.fill")
+                        }
+
+                        Button {
                             showMobileDanmakuSheet()
                         } label: {
                             Image(systemName: "text.magnifyingglass")
@@ -809,6 +842,9 @@ struct RootView: View {
             onSetHomeItemPlayedState: { item, played in
                 setHomeItemPlayedState(item, played: played)
             },
+            onDownloadHomeItem: { item in
+                downloadHomeItem(item)
+            },
             onSelectHomeSource: { accountID in
                 coordinator.selectHomeJellyfinAccount(accountID)
             }
@@ -855,6 +891,10 @@ struct RootView: View {
     private func setHomeItemPlayedState(_ item: JellyfinHomeItem, played: Bool)
     {
         coordinator.setJellyfinHomeItemPlayedState(item, played: played)
+    }
+
+    private func downloadHomeItem(_ item: JellyfinHomeItem) {
+        coordinator.downloadJellyfinHomeItem(item)
     }
 
     private var workspaceHeaderTitle: String {
@@ -1179,16 +1219,7 @@ struct RootView: View {
                 }
             }
 
-            trackMenu(
-                title: playback.selectedSubtitleTrack?.title ?? "字幕关闭",
-                systemImage: "captions.bubble",
-                tracks: playback.subtitleTracks,
-                selectedID: playback.selectedSubtitleTrackID,
-                includeOffOption: true
-            ) { id in
-                notePlaybackInteraction()
-                coordinator.selectSubtitleTrack(id: id)
-            }
+            subtitleTrackMenu
 
             chromeButton(
                 systemName: playbackDanmakuEnabled
@@ -1328,6 +1359,15 @@ struct RootView: View {
                     .disabled(playback.audioTracks.isEmpty)
 
                     Menu {
+                        Button {
+                            notePlaybackInteraction()
+                            subtitleImporterPresented = true
+                        } label: {
+                            Label("挂载外挂字幕", systemImage: "plus")
+                        }
+
+                        Divider()
+
                         trackMenuButton(
                             title: "关闭字幕",
                             detail: "",
@@ -1464,6 +1504,44 @@ struct RootView: View {
                 y: 0,
                 width: fittedWidth,
                 height: containerSize.height
+            )
+        }
+    }
+
+    private var subtitleTrackMenu: some View {
+        Menu {
+            Button {
+                notePlaybackInteraction()
+                subtitleImporterPresented = true
+            } label: {
+                Label("挂载外挂字幕", systemImage: "plus")
+            }
+
+            Divider()
+
+            trackMenuButton(
+                title: "关闭字幕",
+                detail: "",
+                isSelected: playback.selectedSubtitleTrackID == nil
+            ) {
+                notePlaybackInteraction()
+                coordinator.selectSubtitleTrack(id: nil)
+            }
+
+            ForEach(playback.subtitleTracks) { track in
+                trackMenuButton(
+                    title: track.title,
+                    detail: track.detail,
+                    isSelected: playback.selectedSubtitleTrackID == track.mpvID
+                ) {
+                    notePlaybackInteraction()
+                    coordinator.selectSubtitleTrack(id: track.mpvID)
+                }
+            }
+        } label: {
+            MenuChip(
+                title: playback.selectedSubtitleTrack?.title ?? "字幕关闭",
+                systemImage: "captions.bubble"
             )
         }
     }
@@ -1931,6 +2009,7 @@ private struct HomeDashboardView: View {
     let onSelectHomeItem: (JellyfinHomeItem) -> Void
     let onOpenHomeItemInLibrary: (JellyfinHomeItem) -> Void
     let onSetHomeItemPlayedState: (JellyfinHomeItem, Bool) -> Void
+    let onDownloadHomeItem: (JellyfinHomeItem) -> Void
     let onSelectHomeSource: (UUID) -> Void
 
     private var featuredItem: JellyfinHomeItem? {
@@ -2464,6 +2543,39 @@ private struct HomeDashboardView: View {
             .buttonStyle(.borderedProminent)
             .tint(Palette.accentDeep)
 
+            if canDownloadHomeItem(featuredItem) {
+                if let offlineEntry = jellyfin.offlineEntry(
+                    forRemoteItemID: featuredItem.id,
+                    accountID: jellyfin.homeAccountID
+                ), featuredItem.kind.isPlayable {
+                    Button {
+                        onShowPlayer()
+                        coordinator.playDownloadedJellyfinEntry(offlineEntry)
+                    } label: {
+                        Label(
+                            "离线播放",
+                            systemImage: "arrow.down.circle.fill"
+                        )
+                    }
+                    .buttonStyle(.bordered)
+                    .tint(.white)
+                } else {
+                    Button {
+                        onDownloadHomeItem(featuredItem)
+                    } label: {
+                        Label(
+                            homeDownloadButtonTitle(for: featuredItem),
+                            systemImage: "arrow.down.circle"
+                        )
+                    }
+                    .buttonStyle(.bordered)
+                    .tint(.white)
+                    .disabled(
+                        jellyfin.isDownloadingOfflineItem(featuredItem.id)
+                    )
+                }
+            }
+
             if coordinator.homeJellyfinAccount != nil {
                 Button {
                     onOpenHomeItemInLibrary(featuredItem)
@@ -2588,6 +2700,53 @@ private struct HomeDashboardView: View {
                                         Spacer(minLength: 8)
 
                                         HStack(spacing: 6) {
+                                            if canDownloadHomeItem(item) {
+                                                if let offlineEntry =
+                                                    jellyfin
+                                                    .offlineEntry(
+                                                        forRemoteItemID: item
+                                                            .id,
+                                                        accountID: jellyfin
+                                                            .homeAccountID
+                                                    ),
+                                                    item.kind.isPlayable
+                                                {
+                                                    homeOverlayIconButton(
+                                                        systemName:
+                                                            "arrow.down.circle.fill",
+                                                        highlighted: true
+                                                    ) {
+                                                        onShowPlayer()
+                                                        coordinator
+                                                            .playDownloadedJellyfinEntry(
+                                                                offlineEntry
+                                                            )
+                                                    }
+                                                } else {
+                                                    homeOverlayIconButton(
+                                                        systemName:
+                                                            jellyfin
+                                                            .isDownloadingOfflineItem(
+                                                                item.id
+                                                            )
+                                                            ? "clock.arrow.circlepath"
+                                                            : "arrow.down.circle",
+                                                        highlighted:
+                                                            jellyfin
+                                                            .isDownloadingOfflineItem(
+                                                                item.id
+                                                            ),
+                                                        showsProgress:
+                                                            jellyfin
+                                                            .isDownloadingOfflineItem(
+                                                                item.id
+                                                            )
+                                                    ) {
+                                                        onDownloadHomeItem(item)
+                                                    }
+                                                }
+                                            }
+
                                             if coordinator.homeJellyfinAccount
                                                 != nil
                                             {
@@ -2737,6 +2896,38 @@ private struct HomeDashboardView: View {
             return route
         }
         return nil
+    }
+
+    private func canDownloadHomeItem(_ item: JellyfinHomeItem) -> Bool {
+        switch item.kind {
+        case .episode, .movie, .video, .series:
+            return true
+        default:
+            return false
+        }
+    }
+
+    private func homeDownloadButtonTitle(for item: JellyfinHomeItem) -> String {
+        if jellyfin.isDownloadingOfflineItem(item.id) {
+            return "下载中"
+        }
+        if item.kind == .series {
+            let downloadedCount = jellyfin.offlineEpisodeCount(
+                forSeriesID: item.id,
+                accountID: jellyfin.homeAccountID
+            )
+            if downloadedCount > 0 {
+                return "已离线 \(downloadedCount) 集"
+            }
+            return "下载整部剧"
+        }
+        if jellyfin.offlineEntry(
+            forRemoteItemID: item.id,
+            accountID: jellyfin.homeAccountID
+        ) != nil {
+            return "已下载"
+        }
+        return "下载"
     }
 
     private func runtimeText(fromTicks ticks: Double?) -> String? {

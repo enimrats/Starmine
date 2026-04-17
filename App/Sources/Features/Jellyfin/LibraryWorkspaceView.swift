@@ -38,6 +38,8 @@ struct LibraryWorkspaceView: View {
     @Binding var jellyfinLibrarySearch: String
     @State private var transientHighlightedEpisodeID: String?
     @State private var clearEpisodeHighlightTask: Task<Void, Never>?
+    @State private var isEpisodeSelectionMode = false
+    @State private var selectedEpisodeIDs: Set<String> = []
     var showsInlineSelectionToolbar = false
     var prefersTouchLayout = false
 
@@ -97,9 +99,16 @@ struct LibraryWorkspaceView: View {
                 .onChange(of: jellyfin.selectedEpisodeID) { newValue in
                     refreshTransientEpisodeHighlight(for: newValue)
                 }
+                .onChange(of: coordinator.selectedJellyfinItem?.id) { _ in
+                    clearEpisodeSelectionMode()
+                }
+                .onChange(of: jellyfin.selectedSeasonID) { _ in
+                    clearEpisodeSelectionMode()
+                }
                 .onDisappear {
                     clearEpisodeHighlightTask?.cancel()
                     clearEpisodeHighlightTask = nil
+                    clearEpisodeSelectionMode()
                 }
             }
         }
@@ -433,6 +442,8 @@ struct LibraryWorkspaceView: View {
                     .frame(maxWidth: .infinity)
                 }
 
+                downloadHeroControls(for: selectedItem)
+
                 if selectedItem.kind.isPlayable {
                     Button {
                         coordinator.setJellyfinMediaItemPlayedState(
@@ -489,6 +500,8 @@ struct LibraryWorkspaceView: View {
                     .tint(Palette.accent)
                 }
 
+                downloadHeroControls(for: selectedItem)
+
                 if selectedItem.kind.isPlayable {
                     Button {
                         coordinator.setJellyfinMediaItemPlayedState(
@@ -527,6 +540,93 @@ struct LibraryWorkspaceView: View {
                     .buttonStyle(.bordered)
                     .tint(.white)
                 }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func downloadHeroControls(for selectedItem: JellyfinMediaItem)
+        -> some View
+    {
+        if selectedItem.kind.isPlayable {
+            if let offlineEntry = jellyfin.offlineEntry(
+                forRemoteItemID: selectedItem.id,
+                accountID: jellyfin.selectedAccountID
+            ) {
+                Button {
+                    workspaceSection = .player
+                    coordinator.playDownloadedJellyfinEntry(offlineEntry)
+                } label: {
+                    Label("播放离线版", systemImage: "arrow.down.circle.fill")
+                }
+                .buttonStyle(.bordered)
+                .tint(.white)
+            } else if jellyfin.isDownloadingOfflineItem(selectedItem.id) {
+                Label("下载中", systemImage: "arrow.down.circle")
+                    .font(
+                        .system(
+                            size: 14,
+                            weight: .semibold,
+                            design: .rounded
+                        )
+                    )
+                    .foregroundStyle(.white.opacity(0.82))
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 10)
+                    .background(.white.opacity(0.12))
+                    .clipShape(Capsule(style: .continuous))
+            } else {
+                Button {
+                    coordinator.downloadJellyfinMediaItem(selectedItem)
+                } label: {
+                    Label("下载到本地", systemImage: "arrow.down.circle")
+                }
+                .buttonStyle(.bordered)
+                .tint(.white)
+            }
+        } else if selectedItem.kind.isSeriesLike {
+            if isEpisodeSelectionMode {
+                Button("下载已选 \(selectedEpisodeIDs.count) 集") {
+                    coordinator.downloadJellyfinEpisodes(
+                        selectedEpisodes,
+                        in: selectedItem,
+                        season: jellyfin.selectedSeason
+                    )
+                    clearEpisodeSelectionMode()
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(Palette.accentDeep)
+                .disabled(selectedEpisodeIDs.isEmpty)
+
+                Button("取消多集选择") {
+                    clearEpisodeSelectionMode()
+                }
+                .buttonStyle(.bordered)
+                .tint(.white)
+            } else {
+                Menu {
+                    if let selectedSeason = jellyfin.selectedSeason {
+                        Button("下载当前季度") {
+                            coordinator.downloadJellyfinSeason(
+                                selectedSeason,
+                                in: selectedItem
+                            )
+                        }
+                    }
+                    Button("下载整部剧") {
+                        coordinator.downloadJellyfinMediaItem(selectedItem)
+                    }
+                    Button("选择多集下载") {
+                        isEpisodeSelectionMode = true
+                    }
+                } label: {
+                    Label(
+                        seriesDownloadSummaryText(for: selectedItem),
+                        systemImage: "arrow.down.circle"
+                    )
+                }
+                .buttonStyle(.bordered)
+                .tint(.white)
             }
         }
     }
@@ -795,6 +895,31 @@ struct LibraryWorkspaceView: View {
                                                 )
                                         }
 
+                                        if let downloadBadge =
+                                            itemDownloadBadge(
+                                                for: item
+                                            )
+                                        {
+                                            Text(downloadBadge)
+                                                .font(
+                                                    .system(
+                                                        size: 11,
+                                                        weight: .bold,
+                                                        design: .rounded
+                                                    )
+                                                )
+                                                .foregroundStyle(.white)
+                                                .padding(.horizontal, 10)
+                                                .padding(.vertical, 6)
+                                                .background(
+                                                    Capsule(style: .continuous)
+                                                        .fill(
+                                                            Palette.accentDeep
+                                                                .opacity(0.92)
+                                                        )
+                                                )
+                                        }
+
                                         Spacer(minLength: 0)
 
                                         if progressFraction(
@@ -1010,6 +1135,43 @@ struct LibraryWorkspaceView: View {
                             systemImage: "play.rectangle.on.rectangle"
                         )
                         Spacer()
+                        if let selectedItem = coordinator.selectedJellyfinItem,
+                            selectedItem.kind.isSeriesLike,
+                            let selectedSeason = jellyfin.selectedSeason,
+                            !jellyfin.episodes.isEmpty
+                        {
+                            if isEpisodeSelectionMode {
+                                Button("下载已选 \(selectedEpisodeIDs.count) 集") {
+                                    coordinator.downloadJellyfinEpisodes(
+                                        selectedEpisodes,
+                                        in: selectedItem,
+                                        season: selectedSeason
+                                    )
+                                    clearEpisodeSelectionMode()
+                                }
+                                .buttonStyle(.borderedProminent)
+                                .tint(Palette.accentDeep)
+                                .disabled(selectedEpisodeIDs.isEmpty)
+
+                                Button("取消多选") {
+                                    clearEpisodeSelectionMode()
+                                }
+                                .buttonStyle(.bordered)
+                            } else {
+                                Button("下载本季") {
+                                    coordinator.downloadJellyfinSeason(
+                                        selectedSeason,
+                                        in: selectedItem
+                                    )
+                                }
+                                .buttonStyle(.bordered)
+
+                                Button("多集下载") {
+                                    isEpisodeSelectionMode = true
+                                }
+                                .buttonStyle(.bordered)
+                            }
+                        }
                         Text("\(filteredJellyfinEpisodes.count) 集")
                             .font(
                                 .system(
@@ -1047,7 +1209,43 @@ struct LibraryWorkspaceView: View {
                     } else {
                         LazyVStack(spacing: 12) {
                             ForEach(filteredJellyfinEpisodes) { episode in
+                                let offlineEntry = jellyfin.offlineEntry(
+                                    forRemoteItemID: episode.id,
+                                    accountID: jellyfin.selectedAccountID
+                                )
+                                let isSelectedForDownload =
+                                    selectedEpisodeIDs
+                                    .contains(episode.id)
                                 HStack(alignment: .top, spacing: 12) {
+                                    if isEpisodeSelectionMode {
+                                        Button {
+                                            toggleEpisodeSelection(episode)
+                                        } label: {
+                                            Image(
+                                                systemName:
+                                                    isSelectedForDownload
+                                                    ? "checkmark.circle.fill"
+                                                    : "circle"
+                                            )
+                                            .font(
+                                                .system(
+                                                    size: 22,
+                                                    weight: .semibold
+                                                )
+                                            )
+                                            .foregroundStyle(
+                                                isSelectedForDownload
+                                                    ? Palette.accentDeep
+                                                    : Palette.ink.opacity(0.28)
+                                            )
+                                            .frame(
+                                                height: metrics
+                                                    .episodeArtworkHeight
+                                            )
+                                        }
+                                        .buttonStyle(.plain)
+                                    }
+
                                     JellyfinArtworkView(
                                         url:
                                             coordinator
@@ -1092,22 +1290,70 @@ struct LibraryWorkspaceView: View {
                                                     Palette.accentDeep
                                                 )
                                             }
+
+                                            if offlineEntry != nil {
+                                                Text("已下载")
+                                                    .font(
+                                                        .system(
+                                                            size: 11,
+                                                            weight: .bold,
+                                                            design: .rounded
+                                                        )
+                                                    )
+                                                    .foregroundStyle(
+                                                        Palette.accentDeep
+                                                    )
+                                                    .padding(.horizontal, 8)
+                                                    .padding(.vertical, 4)
+                                                    .background(
+                                                        Capsule(
+                                                            style: .continuous
+                                                        )
+                                                        .fill(Palette.selection)
+                                                    )
+                                            } else if jellyfin
+                                                .isDownloadingOfflineItem(
+                                                    episode.id
+                                                )
+                                            {
+                                                Text("下载中")
+                                                    .font(
+                                                        .system(
+                                                            size: 11,
+                                                            weight: .bold,
+                                                            design: .rounded
+                                                        )
+                                                    )
+                                                    .foregroundStyle(
+                                                        Color.orange
+                                                    )
+                                            }
                                         }
 
                                         if let runtime = runtimeText(
                                             fromTicks: episode.runTimeTicks
                                         ).nilIfEmpty {
-                                            Text(runtime)
-                                                .font(
-                                                    .system(
-                                                        size: 12,
-                                                        weight: .semibold,
-                                                        design: .rounded
-                                                    )
+                                            Text(
+                                                [
+                                                    runtime,
+                                                    offlineEntry?.subtitles
+                                                        .isEmpty == false
+                                                        ? "\(offlineEntry?.subtitles.count ?? 0) 字幕"
+                                                        : nil,
+                                                ]
+                                                .compactMap { $0 }
+                                                .joined(separator: " · ")
+                                            )
+                                            .font(
+                                                .system(
+                                                    size: 12,
+                                                    weight: .semibold,
+                                                    design: .rounded
                                                 )
-                                                .foregroundStyle(
-                                                    Palette.ink.opacity(0.58)
-                                                )
+                                            )
+                                            .foregroundStyle(
+                                                Palette.ink.opacity(0.58)
+                                            )
                                         }
 
                                         if let overview = episode.overview?
@@ -1159,6 +1405,72 @@ struct LibraryWorkspaceView: View {
                                         }
                                         .buttonStyle(.plain)
 
+                                        Group {
+                                            if let offlineEntry {
+                                                Button {
+                                                    workspaceSection = .player
+                                                    coordinator
+                                                        .playDownloadedJellyfinEntry(
+                                                            offlineEntry
+                                                        )
+                                                } label: {
+                                                    Image(
+                                                        systemName:
+                                                            "arrow.down.circle.fill"
+                                                    )
+                                                    .font(
+                                                        .system(
+                                                            size: 20,
+                                                            weight: .semibold
+                                                        )
+                                                    )
+                                                    .foregroundStyle(
+                                                        Palette.accentDeep
+                                                    )
+                                                }
+                                                .buttonStyle(.plain)
+                                            } else if jellyfin
+                                                .isDownloadingOfflineItem(
+                                                    episode.id
+                                                )
+                                            {
+                                                ProgressView()
+                                                    .tint(Palette.accentDeep)
+                                                    .frame(
+                                                        width: 24,
+                                                        height: 24
+                                                    )
+                                            } else if let selectedItem =
+                                                coordinator.selectedJellyfinItem
+                                            {
+                                                Button {
+                                                    coordinator
+                                                        .downloadJellyfinEpisodes(
+                                                            [episode],
+                                                            in: selectedItem,
+                                                            season: jellyfin
+                                                                .selectedSeason
+                                                        )
+                                                } label: {
+                                                    Image(
+                                                        systemName:
+                                                            "arrow.down.circle"
+                                                    )
+                                                    .font(
+                                                        .system(
+                                                            size: 20,
+                                                            weight: .semibold
+                                                        )
+                                                    )
+                                                    .foregroundStyle(
+                                                        Palette.accentDeep
+                                                    )
+                                                }
+                                                .buttonStyle(.plain)
+                                            }
+                                        }
+                                        .frame(width: 24, height: 24)
+
                                         Button {
                                             coordinator
                                                 .setJellyfinEpisodePlayedState(
@@ -1209,11 +1521,13 @@ struct LibraryWorkspaceView: View {
                                         style: .continuous
                                     )
                                     .fill(
-                                        isTransientlyHighlightingEpisode(
-                                            episode.id
-                                        )
+                                        isSelectedForDownload
                                             ? Palette.selection
-                                            : Color.white.opacity(0.74)
+                                            : isTransientlyHighlightingEpisode(
+                                                episode.id
+                                            )
+                                                ? Palette.selection
+                                                : Color.white.opacity(0.74)
                                     )
                                 )
                                 .overlay {
@@ -1222,13 +1536,18 @@ struct LibraryWorkspaceView: View {
                                         style: .continuous
                                     )
                                     .strokeBorder(
-                                        isTransientlyHighlightingEpisode(
-                                            episode.id
-                                        )
+                                        isSelectedForDownload
                                             ? Palette.accentDeep.opacity(0.4)
-                                            : .white.opacity(0.5),
+                                            : isTransientlyHighlightingEpisode(
+                                                episode.id
+                                            )
+                                                ? Palette.accentDeep.opacity(
+                                                    0.4
+                                                )
+                                                : .white.opacity(0.5),
                                         lineWidth:
-                                            isTransientlyHighlightingEpisode(
+                                            isSelectedForDownload
+                                            || isTransientlyHighlightingEpisode(
                                                 episode.id
                                             )
                                             ? 1.5 : 1
@@ -1242,8 +1561,12 @@ struct LibraryWorkspaceView: View {
                                 )
                                 .id(libraryEpisodeID(for: episode.id))
                                 .onTapGesture {
-                                    workspaceSection = .player
-                                    coordinator.playJellyfinEpisode(episode)
+                                    if isEpisodeSelectionMode {
+                                        toggleEpisodeSelection(episode)
+                                    } else {
+                                        workspaceSection = .player
+                                        coordinator.playJellyfinEpisode(episode)
+                                    }
                                 }
                             }
                         }
@@ -1338,6 +1661,54 @@ struct LibraryWorkspaceView: View {
         }
         .padding(metrics.panelPadding)
         .panelStyle(cornerRadius: metrics.heroCornerRadius)
+    }
+
+    private var selectedEpisodes: [JellyfinEpisode] {
+        jellyfin.episodes.filter { selectedEpisodeIDs.contains($0.id) }
+    }
+
+    private func clearEpisodeSelectionMode() {
+        isEpisodeSelectionMode = false
+        selectedEpisodeIDs.removeAll()
+    }
+
+    private func toggleEpisodeSelection(_ episode: JellyfinEpisode) {
+        if selectedEpisodeIDs.contains(episode.id) {
+            selectedEpisodeIDs.remove(episode.id)
+        } else {
+            selectedEpisodeIDs.insert(episode.id)
+        }
+    }
+
+    private func downloadedEpisodeCount(for seriesID: String) -> Int {
+        jellyfin.offlineEpisodeCount(
+            forSeriesID: seriesID,
+            accountID: jellyfin.selectedAccountID
+        )
+    }
+
+    private func itemDownloadBadge(for item: JellyfinMediaItem) -> String? {
+        if jellyfin.offlineEntry(
+            forRemoteItemID: item.id,
+            accountID: jellyfin.selectedAccountID
+        ) != nil {
+            return "已下载"
+        }
+        if jellyfin.isDownloadingOfflineItem(item.id) {
+            return "下载中"
+        }
+        guard item.kind.isSeriesLike else { return nil }
+        let downloadedCount = downloadedEpisodeCount(for: item.id)
+        guard downloadedCount > 0 else { return nil }
+        return "离线 \(downloadedCount) 集"
+    }
+
+    private func seriesDownloadSummaryText(for item: JellyfinMediaItem)
+        -> String
+    {
+        let downloadedCount = downloadedEpisodeCount(for: item.id)
+        guard downloadedCount > 0 else { return "下载..." }
+        return "已离线 \(downloadedCount) 集"
     }
 
     private var filteredJellyfinItems: [JellyfinMediaItem] {

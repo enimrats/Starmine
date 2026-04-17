@@ -76,4 +76,33 @@ final class JellyfinModelsTests: XCTestCase {
 
         XCTAssertEqual(episode.danmakuEpisodeOrdinal, 12)
     }
+
+    func testPlaybackSubtitleStreamResolvesExternalURLAndPreservesFlags() {
+        let payload: [String: Any] = [
+            "Type": "Subtitle",
+            "Index": 3,
+            "DisplayTitle": "简体中文",
+            "Language": "chi",
+            "Codec": "ass",
+            "IsExternal": true,
+            "IsDefault": true,
+            "DeliveryUrl": "/Videos/item/source/Subtitles/3/Stream.ass",
+        ]
+
+        let stream = JellyfinPlaybackSubtitleStream(payload: payload)?
+            .resolving(
+                baseURL: "http://example.com",
+                accessToken: "token",
+                itemID: "item",
+                mediaSourceID: "source"
+            )
+
+        XCTAssertEqual(stream?.displayTitle, "简体中文 · CHI · ASS · 外部 · 默认")
+        XCTAssertEqual(
+            stream?.streamURL?.absoluteString,
+            "http://example.com/Videos/item/source/Subtitles/3/Stream.ass?api_key=token"
+        )
+        XCTAssertTrue(stream?.isExternal == true)
+        XCTAssertTrue(stream?.isDefault == true)
+    }
 }

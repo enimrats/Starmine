@@ -62,6 +62,58 @@ enum JellyfinURLTools {
         }
         return "默认线路"
     }
+
+    static func resolve(
+        _ rawPath: String?,
+        baseURL: String,
+        accessToken: String? = nil
+    ) -> URL? {
+        guard let rawPath = rawPath?.nilIfBlank else { return nil }
+        if rawPath.hasPrefix("http://") || rawPath.hasPrefix("https://") {
+            return URL(string: rawPath)
+        }
+
+        let normalizedPath = rawPath.hasPrefix("/") ? rawPath : "/\(rawPath)"
+        guard
+            var components = URLComponents(
+                string: "\(baseURL)\(normalizedPath)"
+            )
+        else {
+            return nil
+        }
+
+        if let accessToken,
+            !(components.queryItems ?? []).contains(where: {
+                $0.name.caseInsensitiveCompare("api_key") == .orderedSame
+            })
+        {
+            var queryItems = components.queryItems ?? []
+            queryItems.append(
+                URLQueryItem(name: "api_key", value: accessToken)
+            )
+            components.queryItems = queryItems
+        }
+
+        return components.url
+    }
+
+    static func subtitleFallbackURL(
+        baseURL: String,
+        accessToken: String,
+        itemID: String,
+        mediaSourceID: String?,
+        streamIndex: Int,
+        fileExtension: String
+    ) -> URL? {
+        var components = URLComponents(
+            string:
+                "\(baseURL)/Videos/\(itemID)/\(mediaSourceID ?? itemID)/Subtitles/\(streamIndex)/Stream.\(fileExtension)"
+        )
+        components?.queryItems = [
+            URLQueryItem(name: "api_key", value: accessToken)
+        ]
+        return components?.url
+    }
 }
 
 enum JellyfinCollectionType: String, Codable, Hashable {
@@ -686,17 +738,22 @@ struct JellyfinEpisode: Identifiable, Hashable {
 
 struct JellyfinPlaybackMediaSource: Identifiable, Hashable {
     var id: String
+    var name: String?
     var path: String?
     var container: String?
     var directStreamPath: String?
     var transcodingPath: String?
+    var subtitleStreams: [JellyfinPlaybackSubtitleStream]
 
     init(payload: [String: Any]) {
         id = payload.string("Id") ?? UUID().uuidString
+        name = payload.string("Name")
         path = payload.string("Path")
         container = payload.string("Container")
         directStreamPath = payload.string("DirectStreamUrl")
         transcodingPath = payload.string("TranscodingUrl")
+        subtitleStreams = payload.dictionaries("MediaStreams")
+            .compactMap(JellyfinPlaybackSubtitleStream.init(payload:))
     }
 }
 
@@ -706,6 +763,342 @@ struct JellyfinPlaybackSession: Hashable {
     var playSessionID: String?
     var streamURL: URL
     var mediaSources: [JellyfinPlaybackMediaSource]
+}
+
+struct JellyfinPlaybackSubtitleStream: Identifiable, Hashable, Codable {
+    var index: Int
+    var title: String?
+    var languageCode: String?
+    var codec: String?
+    var isExternal: Bool
+    var isDefault: Bool
+    var isForced: Bool
+    var deliveryMethod: String?
+    var deliveryURLPath: String?
+    var streamURL: URL?
+
+    init?(
+        payload: [String: Any]
+    ) {
+        guard
+            payload.string("Type")?.caseInsensitiveCompare("Subtitle")
+                == .orderedSame,
+            let index = payload.int("Index")
+        else {
+            return nil
+        }
+        self.index = index
+        title =
+            payload.string("DisplayTitle")
+            ?? payload.string("Title")
+            ?? payload.string("LocalizedDisplayTitle")
+        languageCode = payload.string("Language")
+        codec = payload.string("Codec")
+        isExternal = payload.bool("IsExternal") ?? false
+        isDefault = payload.bool("IsDefault") ?? false
+        isForced = payload.bool("IsForced") ?? false
+        deliveryMethod = payload.string("DeliveryMethod")
+        deliveryURLPath = payload.string("DeliveryUrl")
+        streamURL = nil
+    }
+
+    var id: String {
+        "subtitle-\(index)-\(languageCode ?? "und")"
+    }
+
+    var fileExtension: String {
+        if let pathExtension = streamURL?.pathExtension.nilIfBlank {
+            return pathExtension
+        }
+        if let deliveryPath = deliveryURLPath?.nilIfBlank,
+            let pathExtension = URL(string: deliveryPath)?.pathExtension
+                .nilIfBlank
+        {
+            return pathExtension
+        }
+        if let codec = codec?.nilIfBlank {
+            return codec.lowercased()
+        }
+        return "srt"
+    }
+
+    var displayTitle: String {
+        let baseTitle =
+            title?.nilIfBlank
+            ?? languageCode?.uppercased()
+            ?? "字幕 \(index + 1)"
+        let detail = [
+            languageCode?.uppercased(),
+            codec?.uppercased(),
+            isExternal ? "外部" : nil,
+            isDefault ? "默认" : nil,
+            isForced ? "强制" : nil,
+        ]
+        .compactMap { $0?.nilIfBlank }
+        .filter { $0.caseInsensitiveCompare(baseTitle) != .orderedSame }
+        .joined(separator: " · ")
+        if detail.isEmpty {
+            return baseTitle
+        }
+        return "\(baseTitle) · \(detail)"
+    }
+
+    func resolving(
+        baseURL: String,
+        accessToken: String,
+        itemID: String,
+        mediaSourceID: String?
+    ) -> JellyfinPlaybackSubtitleStream {
+        var copy = self
+        copy.streamURL =
+            JellyfinURLTools.resolve(
+                deliveryURLPath,
+                baseURL: baseURL,
+                accessToken: accessToken
+            )
+            ?? JellyfinURLTools.subtitleFallbackURL(
+                baseURL: baseURL,
+                accessToken: accessToken,
+                itemID: itemID,
+                mediaSourceID: mediaSourceID,
+                streamIndex: index,
+                fileExtension: fileExtension
+            )
+        return copy
+    }
+}
+
+enum JellyfinOfflineSyncState: String, Codable, Hashable {
+    case synced
+    case pendingUpload
+    case conflict
+    case failed
+}
+
+enum JellyfinOfflineDownloadPhase: String, Hashable {
+    case queued
+    case resolving
+    case downloadingVideo
+    case downloadingSubtitles
+    case downloadingArtwork
+    case finalizing
+    case failed
+
+    var displayName: String {
+        switch self {
+        case .queued:
+            return "排队中"
+        case .resolving:
+            return "整理元数据"
+        case .downloadingVideo:
+            return "下载视频"
+        case .downloadingSubtitles:
+            return "下载字幕"
+        case .downloadingArtwork:
+            return "下载封面"
+        case .finalizing:
+            return "整理本地副本"
+        case .failed:
+            return "下载失败"
+        }
+    }
+}
+
+struct JellyfinOfflineSubtitle: Identifiable, Codable, Hashable {
+    var id: UUID
+    var title: String
+    var languageCode: String?
+    var relativePath: String
+    var isDefault: Bool
+    var isForced: Bool
+
+    init(
+        id: UUID = UUID(),
+        title: String,
+        languageCode: String?,
+        relativePath: String,
+        isDefault: Bool = false,
+        isForced: Bool = false
+    ) {
+        self.id = id
+        self.title = title
+        self.languageCode = languageCode
+        self.relativePath = relativePath
+        self.isDefault = isDefault
+        self.isForced = isForced
+    }
+}
+
+struct JellyfinOfflineEntry: Identifiable, Codable, Hashable {
+    var id: UUID
+    var serverID: String
+    var userID: String
+    var accountDisplayTitle: String
+    var sourceLibraryName: String?
+    var remoteItemID: String
+    var remoteItemKind: JellyfinItemKind
+    var title: String
+    var episodeLabel: String
+    var collectionTitle: String?
+    var overview: String?
+    var seriesID: String?
+    var seriesTitle: String?
+    var seasonID: String?
+    var seasonTitle: String?
+    var seasonNumber: Int?
+    var episodeNumber: Int?
+    var productionYear: Int?
+    var communityRating: String?
+    var runTimeTicks: Double?
+    var videoRelativePath: String
+    var posterRelativePath: String?
+    var backdropRelativePath: String?
+    var thumbnailRelativePath: String?
+    var seasonPosterRelativePath: String?
+    var subtitles: [JellyfinOfflineSubtitle]
+    var localUserData: JellyfinUserData
+    var baselineUserData: JellyfinUserData
+    var conflictingRemoteUserData: JellyfinUserData?
+    var syncState: JellyfinOfflineSyncState
+    var syncErrorMessage: String?
+    var downloadedAt: Date
+    var lastLocalUpdateAt: Date?
+    var lastSyncAt: Date?
+    var byteCount: Int64?
+
+    init(
+        id: UUID = UUID(),
+        serverID: String,
+        userID: String,
+        accountDisplayTitle: String,
+        sourceLibraryName: String?,
+        remoteItemID: String,
+        remoteItemKind: JellyfinItemKind,
+        title: String,
+        episodeLabel: String,
+        collectionTitle: String?,
+        overview: String?,
+        seriesID: String?,
+        seriesTitle: String?,
+        seasonID: String?,
+        seasonTitle: String?,
+        seasonNumber: Int?,
+        episodeNumber: Int?,
+        productionYear: Int?,
+        communityRating: String?,
+        runTimeTicks: Double?,
+        videoRelativePath: String,
+        posterRelativePath: String?,
+        backdropRelativePath: String?,
+        thumbnailRelativePath: String?,
+        seasonPosterRelativePath: String?,
+        subtitles: [JellyfinOfflineSubtitle],
+        localUserData: JellyfinUserData,
+        baselineUserData: JellyfinUserData,
+        conflictingRemoteUserData: JellyfinUserData? = nil,
+        syncState: JellyfinOfflineSyncState = .synced,
+        syncErrorMessage: String? = nil,
+        downloadedAt: Date = Date(),
+        lastLocalUpdateAt: Date? = nil,
+        lastSyncAt: Date? = nil,
+        byteCount: Int64? = nil
+    ) {
+        self.id = id
+        self.serverID = serverID
+        self.userID = userID
+        self.accountDisplayTitle = accountDisplayTitle
+        self.sourceLibraryName = sourceLibraryName
+        self.remoteItemID = remoteItemID
+        self.remoteItemKind = remoteItemKind
+        self.title = title
+        self.episodeLabel = episodeLabel
+        self.collectionTitle = collectionTitle
+        self.overview = overview
+        self.seriesID = seriesID
+        self.seriesTitle = seriesTitle
+        self.seasonID = seasonID
+        self.seasonTitle = seasonTitle
+        self.seasonNumber = seasonNumber
+        self.episodeNumber = episodeNumber
+        self.productionYear = productionYear
+        self.communityRating = communityRating
+        self.runTimeTicks = runTimeTicks
+        self.videoRelativePath = videoRelativePath
+        self.posterRelativePath = posterRelativePath
+        self.backdropRelativePath = backdropRelativePath
+        self.thumbnailRelativePath = thumbnailRelativePath
+        self.seasonPosterRelativePath = seasonPosterRelativePath
+        self.subtitles = subtitles
+        self.localUserData = localUserData
+        self.baselineUserData = baselineUserData
+        self.conflictingRemoteUserData = conflictingRemoteUserData
+        self.syncState = syncState
+        self.syncErrorMessage = syncErrorMessage
+        self.downloadedAt = downloadedAt
+        self.lastLocalUpdateAt = lastLocalUpdateAt
+        self.lastSyncAt = lastSyncAt
+        self.byteCount = byteCount
+    }
+
+    var displayTitle: String {
+        if remoteItemKind == .episode {
+            return seriesTitle ?? title
+        }
+        return title
+    }
+
+    var detailTitle: String {
+        if remoteItemKind == .episode {
+            return episodeLabel.nilIfBlank ?? title
+        }
+        return title
+    }
+
+    var progressFraction: Double {
+        guard let position = localUserData.playbackPositionSeconds,
+            let runTimeTicks
+        else {
+            return 0
+        }
+        let duration = runTimeTicks / 10_000_000.0
+        guard duration > 0 else { return 0 }
+        return max(0, min(1, position / duration))
+    }
+
+    var isPlayed: Bool {
+        localUserData.played == true
+    }
+}
+
+struct JellyfinOfflineDownloadTask: Identifiable, Hashable {
+    var id: UUID
+    var remoteItemID: String
+    var title: String
+    var detailTitle: String
+    var itemKind: JellyfinItemKind
+    var phase: JellyfinOfflineDownloadPhase
+    var progress: Double
+    var errorMessage: String?
+
+    init(
+        id: UUID = UUID(),
+        remoteItemID: String,
+        title: String,
+        detailTitle: String,
+        itemKind: JellyfinItemKind,
+        phase: JellyfinOfflineDownloadPhase = .queued,
+        progress: Double = 0.05,
+        errorMessage: String? = nil
+    ) {
+        self.id = id
+        self.remoteItemID = remoteItemID
+        self.title = title
+        self.detailTitle = detailTitle
+        self.itemKind = itemKind
+        self.phase = phase
+        self.progress = progress
+        self.errorMessage = errorMessage
+    }
 }
 
 enum JellyfinDateParser {

@@ -1,6 +1,11 @@
 import Foundation
 import Libmpv
 
+private struct PendingExternalSubtitle {
+    var url: URL
+    var shouldSelect: Bool
+}
+
 final class MPVPlayerController {
     var onSnapshot: ((PlaybackSnapshot) -> Void)?
     var onLogMessage: ((String) -> Void)?
@@ -14,6 +19,7 @@ final class MPVPlayerController {
     private var pollTimer: DispatchSourceTimer?
     private var hostID: Int64?
     private var pendingURL: URL?
+    private var pendingExternalSubtitles: [PendingExternalSubtitle] = []
     private var initialized = false
     private var lastTrackState = PlayerTrackState()
     private var needsTrackRefresh = true
@@ -42,8 +48,11 @@ final class MPVPlayerController {
         }
     }
 
-    func load(_ url: URL) {
+    func load(_ url: URL, externalSubtitles: [URL] = []) {
         queue.async {
+            self.pendingExternalSubtitles = externalSubtitles.map {
+                PendingExternalSubtitle(url: $0, shouldSelect: false)
+            }
             guard self.initialized else {
                 self.pendingURL = url
                 return
@@ -74,6 +83,7 @@ final class MPVPlayerController {
     func stop() {
         queue.async {
             self.pendingURL = nil
+            self.pendingExternalSubtitles.removeAll()
             guard self.initialized else { return }
             self.commandLocked("stop", arguments: [])
             self.needsTrackRefresh = true
@@ -109,6 +119,21 @@ final class MPVPlayerController {
         queue.async {
             self.setTrackSelectionLocked(name: "sid", value: id)
             self.needsTrackRefresh = true
+        }
+    }
+
+    func addExternalSubtitle(_ url: URL, shouldSelect: Bool = true) {
+        queue.async {
+            let subtitle = PendingExternalSubtitle(
+                url: url,
+                shouldSelect: shouldSelect
+            )
+            if self.stringPropertyLocked(name: "path") != nil {
+                self.addExternalSubtitleLocked(subtitle)
+                self.needsTrackRefresh = true
+            } else {
+                self.pendingExternalSubtitles.append(subtitle)
+            }
         }
     }
 
@@ -225,6 +250,28 @@ final class MPVPlayerController {
     private func loadLocked(_ url: URL) {
         let arguments = [url.absoluteString, "replace"]
         commandLocked("loadfile", arguments: arguments)
+    }
+
+    private func applyPendingExternalSubtitlesLocked() {
+        guard !pendingExternalSubtitles.isEmpty else { return }
+        for subtitle in pendingExternalSubtitles {
+            addExternalSubtitleLocked(subtitle)
+        }
+        pendingExternalSubtitles.removeAll()
+    }
+
+    private func addExternalSubtitleLocked(_ subtitle: PendingExternalSubtitle)
+    {
+        let subtitleTarget =
+            subtitle.url.isFileURL
+            ? subtitle.url.path : subtitle.url.absoluteString
+        commandLocked(
+            "sub-add",
+            arguments: [
+                subtitleTarget,
+                subtitle.shouldSelect ? "select" : "auto",
+            ]
+        )
     }
 
     private func commandLocked(_ command: String, arguments: [String]) {
@@ -408,9 +455,11 @@ final class MPVPlayerController {
                         "[\(String(cString: prefix))] \(String(cString: level)): \(String(cString: text))"
                     )
                 }
-            case MPV_EVENT_START_FILE, MPV_EVENT_FILE_LOADED,
-                MPV_EVENT_VIDEO_RECONFIG:
+            case MPV_EVENT_START_FILE, MPV_EVENT_VIDEO_RECONFIG:
                 needsTrackRefresh = true
+            case MPV_EVENT_FILE_LOADED:
+                needsTrackRefresh = true
+                applyPendingExternalSubtitlesLocked()
             case MPV_EVENT_SHUTDOWN:
                 tearDownLocked()
                 return
@@ -423,6 +472,7 @@ final class MPVPlayerController {
     private func tearDownLocked() {
         pollTimer?.cancel()
         pollTimer = nil
+        pendingExternalSubtitles.removeAll()
         if let mpv {
             mpv_terminate_destroy(mpv)
         }

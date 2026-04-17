@@ -12,7 +12,10 @@ actor MockJellyfinClient: JellyfinClientProtocol {
     let recentItemsByAccountID: [UUID: [JellyfinHomeItem]]
     let nextUpByAccountID: [UUID: [JellyfinHomeItem]]
     let recommendedItemsByAccountID: [UUID: [JellyfinHomeItem]]
+    let userDataByItemID: [String: JellyfinUserData]
     let playbackSessionsByItemID: [String: JellyfinPlaybackSession]
+    let createPlaybackSessionHandler:
+        (@Sendable (UUID, String, String?) async throws -> JellyfinPlaybackSession)?
     var lastRememberedLibraryID: String?
     private(set) var startedPlaybackCount = 0
     private(set) var progressPlaybackCount = 0
@@ -31,7 +34,12 @@ actor MockJellyfinClient: JellyfinClientProtocol {
         recentItemsByAccountID: [UUID: [JellyfinHomeItem]] = [:],
         nextUpByAccountID: [UUID: [JellyfinHomeItem]] = [:],
         recommendedItemsByAccountID: [UUID: [JellyfinHomeItem]] = [:],
-        playbackSessionsByItemID: [String: JellyfinPlaybackSession] = [:]
+        userDataByItemID: [String: JellyfinUserData] = [:],
+        playbackSessionsByItemID: [String: JellyfinPlaybackSession] = [:],
+        createPlaybackSessionHandler: (
+            @Sendable (UUID, String, String?) async throws
+                -> JellyfinPlaybackSession
+        )? = nil
     ) {
         self.snapshotValue = snapshotValue
         self.librariesByAccountID = librariesByAccountID
@@ -43,7 +51,9 @@ actor MockJellyfinClient: JellyfinClientProtocol {
         self.recentItemsByAccountID = recentItemsByAccountID
         self.nextUpByAccountID = nextUpByAccountID
         self.recommendedItemsByAccountID = recommendedItemsByAccountID
+        self.userDataByItemID = userDataByItemID
         self.playbackSessionsByItemID = playbackSessionsByItemID
+        self.createPlaybackSessionHandler = createPlaybackSessionHandler
     }
 
     func snapshot() async -> JellyfinStoreSnapshot {
@@ -111,8 +121,19 @@ actor MockJellyfinClient: JellyfinClientProtocol {
         Array((recommendedItemsByAccountID[accountID] ?? []).prefix(limit))
     }
 
+    func loadUserData(accountID: UUID, itemID: String) async throws -> JellyfinUserData {
+        userDataByItemID[itemID] ?? JellyfinUserData()
+    }
+
     func createPlaybackSession(accountID: UUID, itemID: String, mediaSourceID: String?) async throws -> JellyfinPlaybackSession {
-        playbackSessionsByItemID[itemID] ?? JellyfinPlaybackSession(
+        if let createPlaybackSessionHandler {
+            return try await createPlaybackSessionHandler(
+                accountID,
+                itemID,
+                mediaSourceID
+            )
+        }
+        return playbackSessionsByItemID[itemID] ?? JellyfinPlaybackSession(
             itemID: itemID,
             mediaSourceID: mediaSourceID,
             playSessionID: nil,
@@ -154,8 +175,81 @@ actor MockJellyfinClient: JellyfinClientProtocol {
     }
 }
 
+actor PlaybackSessionGate {
+    private var hasStarted = false
+    private var hasResumed = false
+    private var startContinuation: CheckedContinuation<Void, Never>?
+    private var resumeContinuation: CheckedContinuation<Void, Never>?
+
+    func markStarted() {
+        hasStarted = true
+        startContinuation?.resume()
+        startContinuation = nil
+    }
+
+    func waitForStart() async {
+        guard !hasStarted else { return }
+        await withCheckedContinuation { continuation in
+            startContinuation = continuation
+        }
+    }
+
+    func waitUntilResumed() async {
+        guard !hasResumed else { return }
+        await withCheckedContinuation { continuation in
+            resumeContinuation = continuation
+        }
+    }
+
+    func resume() {
+        hasResumed = true
+        resumeContinuation?.resume()
+        resumeContinuation = nil
+    }
+}
+
 @MainActor
 final class JellyfinStoreTests: XCTestCase {
+    private func makeStore(
+        client: any JellyfinClientProtocol,
+        offlineRootURL: URL? = nil
+    ) -> JellyfinStore {
+        let suiteName = "JellyfinStoreTests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName) ?? .standard
+        defaults.removePersistentDomain(forName: suiteName)
+        let resolvedOfflineRootURL = offlineRootURL ?? FileManager.default.temporaryDirectory
+            .appendingPathComponent(suiteName, isDirectory: true)
+        return JellyfinStore(
+            client: client,
+            defaults: defaults,
+            fileManager: .default,
+            offlineRootURL: resolvedOfflineRootURL
+        )
+    }
+
+    private func writeOfflineManifest(
+        entries: [JellyfinOfflineEntry],
+        offlineRootURL: URL
+    ) throws {
+        for entry in entries {
+            let videoURL = offlineRootURL.appendingPathComponent(
+                entry.videoRelativePath
+            )
+            try FileManager.default.createDirectory(
+                at: videoURL.deletingLastPathComponent(),
+                withIntermediateDirectories: true
+            )
+            try Data([0x00]).write(to: videoURL)
+        }
+
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .millisecondsSince1970
+        try encoder.encode(entries).write(
+            to: offlineRootURL.appendingPathComponent("manifest.json"),
+            options: .atomic
+        )
+    }
+
     func testRestoreStateRefreshesRememberedLibrary() async throws {
         let accountID = UUID()
         let account = JellyfinAccountProfile(
@@ -181,7 +275,7 @@ final class JellyfinStoreTests: XCTestCase {
             ]
         )
 
-        let store = JellyfinStore(client: client)
+        let store = makeStore(client: client)
         try await store.restoreState()
 
         XCTAssertEqual(store.selectedAccountID, accountID)
@@ -200,7 +294,7 @@ final class JellyfinStoreTests: XCTestCase {
             episodesBySeasonID: ["season-1": [episode]]
         )
 
-        let store = JellyfinStore(client: client)
+        let store = makeStore(client: client)
         store.selectedAccountID = accountID
 
         let item = JellyfinMediaItem(payload: ["Id": "series-1", "Name": "Frieren", "Type": "Series"])
@@ -228,7 +322,7 @@ final class JellyfinStoreTests: XCTestCase {
             ]
         )
 
-        let store = JellyfinStore(client: client)
+        let store = makeStore(client: client)
         store.selectedAccountID = accountID
         store.episodes = [previous, current, next]
 
@@ -268,7 +362,7 @@ final class JellyfinStoreTests: XCTestCase {
             itemsByLibraryID: ["tv": []]
         )
 
-        let store = JellyfinStore(client: client)
+        let store = makeStore(client: client)
         store.selectedAccountID = accountID
         store.accounts = [account]
 
@@ -329,7 +423,7 @@ final class JellyfinStoreTests: XCTestCase {
             ]
         )
 
-        let store = JellyfinStore(client: client)
+        let store = makeStore(client: client)
         store.accounts = [removedAccount, remainingAccount]
         store.selectedAccountID = removedAccountID
         store.selectedLibraryID = "old-library"
@@ -422,9 +516,10 @@ final class JellyfinStoreTests: XCTestCase {
             ]
         )
 
-        let store = JellyfinStore(client: client)
+        let store = makeStore(client: client)
         store.accounts = [account]
         store.selectedAccountID = accountID
+        store.homeAccountID = accountID
 
         try await store.refreshHome()
 
@@ -474,9 +569,10 @@ final class JellyfinStoreTests: XCTestCase {
             ]
         )
 
-        let store = JellyfinStore(client: client)
+        let store = makeStore(client: client)
         store.accounts = [account]
         store.selectedAccountID = accountID
+        store.homeAccountID = accountID
         store.recentItems = [
             JellyfinHomeItem(
                 payload: [
@@ -489,6 +585,7 @@ final class JellyfinStoreTests: XCTestCase {
         ]
 
         let candidate = JellyfinPlaybackCandidate(
+            accountID: accountID,
             session: session,
             itemKind: .movie,
             title: "Movie",
@@ -584,7 +681,7 @@ final class JellyfinStoreTests: XCTestCase {
             ]
         )
 
-        let store = JellyfinStore(client: client)
+        let store = makeStore(client: client)
         store.accounts = [account]
         store.selectedAccountID = accountID
 
@@ -662,7 +759,7 @@ final class JellyfinStoreTests: XCTestCase {
             ]
         )
 
-        let store = JellyfinStore(client: client)
+        let store = makeStore(client: client)
         store.accounts = [account]
         store.selectedAccountID = accountID
 
@@ -732,9 +829,10 @@ final class JellyfinStoreTests: XCTestCase {
             ]
         )
 
-        let store = JellyfinStore(client: client)
+        let store = makeStore(client: client)
         store.accounts = [account]
         store.selectedAccountID = accountID
+        store.homeAccountID = accountID
         store.items = [movie]
         store.resumeItems = [JellyfinHomeItem(mediaItem: movie)]
         store.recentItems = [JellyfinHomeItem(mediaItem: movie)]
@@ -747,5 +845,557 @@ final class JellyfinStoreTests: XCTestCase {
         let calls = await client.playedMutationCalls()
         XCTAssertEqual(calls.0, ["movie-1"])
         XCTAssertEqual(calls.1, [])
+    }
+
+    func testOfflineLookupAndSeriesCountRespectRequestedAccount() throws {
+        let activeAccountID = UUID()
+        let otherAccountID = UUID()
+        let activeAccount = JellyfinAccountProfile(
+            id: activeAccountID,
+            serverID: "server-a",
+            serverName: "Jellyfin A",
+            username: "alice",
+            userID: "user-a",
+            accessToken: "token-a",
+            routes: [JellyfinRoute(name: "default", url: "http://a.example.com")]
+        )
+        let otherAccount = JellyfinAccountProfile(
+            id: otherAccountID,
+            serverID: "server-b",
+            serverName: "Jellyfin B",
+            username: "bob",
+            userID: "user-b",
+            accessToken: "token-b",
+            routes: [JellyfinRoute(name: "default", url: "http://b.example.com")]
+        )
+
+        let suiteName = "JellyfinStoreTests.scope.\(UUID().uuidString)"
+        let offlineRootURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent(suiteName, isDirectory: true)
+        let movieEntryID = UUID(uuidString: "11111111-2222-3333-4444-555555555555")!
+        let episodeEntryID = UUID(uuidString: "66666666-7777-8888-9999-AAAAAAAAAAAA")!
+        let otherMovieEntry = JellyfinOfflineEntry(
+            id: movieEntryID,
+            serverID: otherAccount.serverID,
+            userID: otherAccount.userID,
+            accountDisplayTitle: otherAccount.displayTitle,
+            sourceLibraryName: "Movies",
+            remoteItemID: "shared-item",
+            remoteItemKind: .movie,
+            title: "Paprika",
+            episodeLabel: "",
+            collectionTitle: nil,
+            overview: nil,
+            seriesID: nil,
+            seriesTitle: nil,
+            seasonID: nil,
+            seasonTitle: nil,
+            seasonNumber: nil,
+            episodeNumber: nil,
+            productionYear: 2006,
+            communityRating: "8.10",
+            runTimeTicks: 5_400_000_000,
+            videoRelativePath: "Entries/\(movieEntryID.uuidString)/movie.mp4",
+            posterRelativePath: nil,
+            backdropRelativePath: nil,
+            thumbnailRelativePath: nil,
+            seasonPosterRelativePath: nil,
+            subtitles: [],
+            localUserData: JellyfinUserData(),
+            baselineUserData: JellyfinUserData()
+        )
+        let otherEpisodeEntry = JellyfinOfflineEntry(
+            id: episodeEntryID,
+            serverID: otherAccount.serverID,
+            userID: otherAccount.userID,
+            accountDisplayTitle: otherAccount.displayTitle,
+            sourceLibraryName: "TV",
+            remoteItemID: "shared-episode",
+            remoteItemKind: .episode,
+            title: "Episode 1",
+            episodeLabel: "S1E1 · Episode 1",
+            collectionTitle: "Frieren",
+            overview: nil,
+            seriesID: "shared-series",
+            seriesTitle: "Frieren",
+            seasonID: "season-1",
+            seasonTitle: "Season 1",
+            seasonNumber: 1,
+            episodeNumber: 1,
+            productionYear: nil,
+            communityRating: nil,
+            runTimeTicks: 1_800_000_000,
+            videoRelativePath: "Entries/\(episodeEntryID.uuidString)/episode.mp4",
+            posterRelativePath: nil,
+            backdropRelativePath: nil,
+            thumbnailRelativePath: nil,
+            seasonPosterRelativePath: nil,
+            subtitles: [],
+            localUserData: JellyfinUserData(),
+            baselineUserData: JellyfinUserData()
+        )
+        try writeOfflineManifest(
+            entries: [otherMovieEntry, otherEpisodeEntry],
+            offlineRootURL: offlineRootURL
+        )
+
+        let store = makeStore(
+            client: MockJellyfinClient(),
+            offlineRootURL: offlineRootURL
+        )
+        store.accounts = [activeAccount, otherAccount]
+        store.selectedAccountID = activeAccountID
+        store.homeAccountID = activeAccountID
+
+        XCTAssertEqual(store.offlineEntries.count, 2)
+        XCTAssertNil(
+            store.offlineEntry(
+                forRemoteItemID: "shared-item",
+                accountID: activeAccountID
+            )
+        )
+        XCTAssertEqual(
+            store.offlineEpisodeCount(
+                forSeriesID: "shared-series",
+                accountID: activeAccountID
+            ),
+            0
+        )
+        XCTAssertEqual(
+            store.offlineEntry(
+                forRemoteItemID: "shared-item",
+                accountID: otherAccountID
+            )?.id,
+            movieEntryID
+        )
+        XCTAssertEqual(
+            store.offlineEpisodeCount(
+                forSeriesID: "shared-series",
+                accountID: otherAccountID
+            ),
+            1
+        )
+    }
+
+    func testSyncOfflineEntriesUploadsPlayedStateAndResetsConflictFields() async throws {
+        let accountID = UUID()
+        let account = JellyfinAccountProfile(
+            id: accountID,
+            serverID: "server",
+            serverName: "Jellyfin",
+            username: "alice",
+            userID: "user",
+            accessToken: "token",
+            routes: [JellyfinRoute(name: "default", url: "http://example.com")]
+        )
+        let client = MockJellyfinClient(
+            snapshotValue: JellyfinStoreSnapshot(
+                accounts: [account],
+                activeAccountID: accountID
+            ),
+            userDataByItemID: [
+                "ep-1": JellyfinUserData(
+                    played: false,
+                    playbackPositionTicks: 0,
+                    lastPlayedDate: Date(timeIntervalSince1970: 1_000)
+                )
+            ]
+        )
+
+        let suiteName = "JellyfinStoreTests.offline.\(UUID().uuidString)"
+        let offlineRootURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent(suiteName, isDirectory: true)
+        let entryID = UUID(uuidString: "AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE")!
+
+        let baseline = JellyfinUserData(
+            played: false,
+            playbackPositionTicks: 0,
+            lastPlayedDate: Date(timeIntervalSince1970: 1_000)
+        )
+        let local = JellyfinUserData(
+            played: true,
+            playbackPositionTicks: 0,
+            lastPlayedDate: Date(timeIntervalSince1970: 2_000)
+        )
+        let entry = JellyfinOfflineEntry(
+            id: entryID,
+            serverID: account.serverID,
+            userID: account.userID,
+            accountDisplayTitle: account.displayTitle,
+            sourceLibraryName: "TV",
+            remoteItemID: "ep-1",
+            remoteItemKind: .episode,
+            title: "Episode 1",
+            episodeLabel: "S1E1 · Episode 1",
+            collectionTitle: "Frieren",
+            overview: nil,
+            seriesID: "series-1",
+            seriesTitle: "Frieren",
+            seasonID: "season-1",
+            seasonTitle: "Season 1",
+            seasonNumber: 1,
+            episodeNumber: 1,
+            productionYear: nil,
+            communityRating: nil,
+            runTimeTicks: 1_800_000_000,
+            videoRelativePath: "Entries/\(entryID.uuidString)/video.mp4",
+            posterRelativePath: nil,
+            backdropRelativePath: nil,
+            thumbnailRelativePath: nil,
+            seasonPosterRelativePath: nil,
+            subtitles: [],
+            localUserData: local,
+            baselineUserData: baseline,
+            conflictingRemoteUserData: JellyfinUserData(
+                played: true,
+                playbackPositionTicks: 123,
+                lastPlayedDate: Date()
+            ),
+            syncState: .pendingUpload,
+            syncErrorMessage: "stale",
+            lastLocalUpdateAt: Date(timeIntervalSince1970: 2_000)
+        )
+        try writeOfflineManifest(
+            entries: [entry],
+            offlineRootURL: offlineRootURL
+        )
+
+        let store = makeStore(
+            client: client,
+            offlineRootURL: offlineRootURL
+        )
+        store.accounts = [account]
+        store.selectedAccountID = accountID
+
+        await store.syncOfflineEntriesIfPossible()
+
+        let syncedEntry = try XCTUnwrap(store.offlineEntries.first)
+        XCTAssertEqual(syncedEntry.syncState, .synced)
+        XCTAssertTrue(syncedEntry.localUserData.played == true)
+        XCTAssertTrue(syncedEntry.baselineUserData.played == true)
+        XCTAssertNil(syncedEntry.conflictingRemoteUserData)
+        XCTAssertNil(syncedEntry.syncErrorMessage)
+        let calls = await client.playedMutationCalls()
+        XCTAssertEqual(calls.0, ["ep-1"])
+        XCTAssertEqual(calls.1, [])
+    }
+
+    func testQueueDownloadForHomeSeriesQueuesEpisodesAcrossSeasons()
+        async throws
+    {
+        let accountID = UUID()
+        let gate = PlaybackSessionGate()
+        let account = JellyfinAccountProfile(
+            id: accountID,
+            serverID: "server",
+            serverName: "Jellyfin",
+            username: "alice",
+            userID: "user",
+            accessToken: "token",
+            routes: [JellyfinRoute(name: "default", url: "http://example.com")]
+        )
+        let season1 = JellyfinSeason(
+            payload: [
+                "Id": "season-1",
+                "Name": "Season 1",
+                "SeriesId": "series-1",
+                "IndexNumber": 1,
+            ]
+        )
+        let season2 = JellyfinSeason(
+            payload: [
+                "Id": "season-2",
+                "Name": "Season 2",
+                "SeriesId": "series-1",
+                "IndexNumber": 2,
+            ]
+        )
+        let episode1 = JellyfinEpisode(
+            payload: [
+                "Id": "ep-1",
+                "Name": "Episode 1",
+                "Type": "Episode",
+                "SeriesId": "series-1",
+                "SeriesName": "Frieren",
+                "SeasonId": "season-1",
+                "IndexNumber": 1,
+                "ParentIndexNumber": 1,
+            ]
+        )
+        let episode2 = JellyfinEpisode(
+            payload: [
+                "Id": "ep-2",
+                "Name": "Episode 2",
+                "Type": "Episode",
+                "SeriesId": "series-1",
+                "SeriesName": "Frieren",
+                "SeasonId": "season-2",
+                "IndexNumber": 1,
+                "ParentIndexNumber": 2,
+            ]
+        )
+        let client = MockJellyfinClient(
+            seasonsBySeriesID: [
+                "series-1": [season1, season2]
+            ],
+            episodesBySeasonID: [
+                "season-1": [episode1],
+                "season-2": [episode2],
+            ],
+            createPlaybackSessionHandler: { _, itemID, mediaSourceID in
+                await gate.markStarted()
+                await gate.waitUntilResumed()
+                return JellyfinPlaybackSession(
+                    itemID: itemID,
+                    mediaSourceID: mediaSourceID,
+                    playSessionID: nil,
+                    streamURL: URL(fileURLWithPath: "/tmp/\(itemID).mp4"),
+                    mediaSources: []
+                )
+            }
+        )
+
+        let store = makeStore(client: client)
+        store.accounts = [account]
+        store.homeAccountID = accountID
+
+        let series = JellyfinHomeItem(
+            payload: [
+                "Id": "series-1",
+                "Name": "Frieren",
+                "Type": "Series",
+            ]
+        )
+
+        try await store.queueDownload(for: series)
+        await gate.waitForStart()
+
+        XCTAssertEqual(store.offlineDownloadTasks.count, 2)
+        XCTAssertEqual(
+            Set(store.offlineDownloadTasks.map(\.remoteItemID)),
+            Set(["ep-1", "ep-2"])
+        )
+
+        await gate.resume()
+        try? await Task.sleep(nanoseconds: 50_000_000)
+    }
+
+    func testDeleteOfflineEntryRecomputesNavigationForActiveOfflinePlayback()
+        throws
+    {
+        let suiteName = "JellyfinStoreTests.offline.navigation.\(UUID().uuidString)"
+        let offlineRootURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent(suiteName, isDirectory: true)
+        let entry1ID = UUID(uuidString: "11111111-1111-1111-1111-111111111111")!
+        let entry2ID = UUID(uuidString: "22222222-2222-2222-2222-222222222222")!
+        let entry3ID = UUID(uuidString: "33333333-3333-3333-3333-333333333333")!
+
+        func makeEpisodeEntry(id: UUID, itemID: String, episodeNumber: Int)
+            -> JellyfinOfflineEntry
+        {
+            JellyfinOfflineEntry(
+                id: id,
+                serverID: "server",
+                userID: "user",
+                accountDisplayTitle: "Jellyfin · alice",
+                sourceLibraryName: "TV",
+                remoteItemID: itemID,
+                remoteItemKind: .episode,
+                title: "Episode \(episodeNumber)",
+                episodeLabel: "S1E\(episodeNumber) · Episode \(episodeNumber)",
+                collectionTitle: "Frieren",
+                overview: nil,
+                seriesID: "series-1",
+                seriesTitle: "Frieren",
+                seasonID: "season-1",
+                seasonTitle: "Season 1",
+                seasonNumber: 1,
+                episodeNumber: episodeNumber,
+                productionYear: nil,
+                communityRating: nil,
+                runTimeTicks: 1_800_000_000,
+                videoRelativePath: "Entries/\(id.uuidString)/ep-\(episodeNumber).mp4",
+                posterRelativePath: nil,
+                backdropRelativePath: nil,
+                thumbnailRelativePath: nil,
+                seasonPosterRelativePath: nil,
+                subtitles: [],
+                localUserData: JellyfinUserData(),
+                baselineUserData: JellyfinUserData()
+            )
+        }
+
+        let entry1 = makeEpisodeEntry(
+            id: entry1ID,
+            itemID: "ep-1",
+            episodeNumber: 1
+        )
+        let entry2 = makeEpisodeEntry(
+            id: entry2ID,
+            itemID: "ep-2",
+            episodeNumber: 2
+        )
+        let entry3 = makeEpisodeEntry(
+            id: entry3ID,
+            itemID: "ep-3",
+            episodeNumber: 3
+        )
+        try writeOfflineManifest(
+            entries: [entry1, entry2, entry3],
+            offlineRootURL: offlineRootURL
+        )
+
+        let store = makeStore(
+            client: MockJellyfinClient(),
+            offlineRootURL: offlineRootURL
+        )
+        store.beginOfflinePlaybackTracking(entry: entry2)
+
+        XCTAssertEqual(store.previousOfflineEntry?.id, entry1ID)
+        XCTAssertEqual(store.nextOfflineEntry?.id, entry3ID)
+
+        store.deleteOfflineEntry(entry1ID)
+        XCTAssertNil(store.previousOfflineEntry)
+        XCTAssertEqual(store.nextOfflineEntry?.id, entry3ID)
+
+        store.deleteOfflineEntry(entry3ID)
+        XCTAssertNil(store.previousOfflineEntry)
+        XCTAssertNil(store.nextOfflineEntry)
+    }
+
+    func testQueueDownloadRejectsDuplicateWhileMatchingItemIsActive()
+        async throws
+    {
+        let accountID = UUID()
+        let gate = PlaybackSessionGate()
+        let client = MockJellyfinClient(
+            createPlaybackSessionHandler: { _, itemID, mediaSourceID in
+                await gate.markStarted()
+                await gate.waitUntilResumed()
+                return JellyfinPlaybackSession(
+                    itemID: itemID,
+                    mediaSourceID: mediaSourceID,
+                    playSessionID: nil,
+                    streamURL: URL(fileURLWithPath: "/tmp/\(itemID).mp4"),
+                    mediaSources: []
+                )
+            }
+        )
+        let store = makeStore(client: client)
+        store.accounts = [
+            JellyfinAccountProfile(
+                id: accountID,
+                serverID: "server",
+                serverName: "Jellyfin",
+                username: "alice",
+                userID: "user",
+                accessToken: "token",
+                routes: [JellyfinRoute(name: "default", url: "http://example.com")]
+            )
+        ]
+        store.selectedAccountID = accountID
+
+        let item = JellyfinMediaItem(
+            payload: ["Id": "movie-1", "Name": "Movie", "Type": "Movie"]
+        )
+
+        try await store.queueDownload(for: item)
+        await gate.waitForStart()
+        try await store.queueDownload(for: item)
+
+        XCTAssertEqual(store.offlineDownloadTasks.count, 1)
+
+        await gate.resume()
+        try? await Task.sleep(nanoseconds: 50_000_000)
+    }
+
+    func testSetOfflinePlayedStateClearsResumePositionBeforeUnplayedSync()
+        async throws
+    {
+        let accountID = UUID()
+        let account = JellyfinAccountProfile(
+            id: accountID,
+            serverID: "server",
+            serverName: "Jellyfin",
+            username: "alice",
+            userID: "user",
+            accessToken: "token",
+            routes: [JellyfinRoute(name: "default", url: "http://example.com")]
+        )
+        let client = MockJellyfinClient(
+            userDataByItemID: [
+                "ep-1": JellyfinUserData(
+                    played: false,
+                    playbackPositionTicks: 1_200_000_000,
+                    lastPlayedDate: Date(timeIntervalSince1970: 1_000)
+                )
+            ]
+        )
+
+        let suiteName = "JellyfinStoreTests.unplayed.\(UUID().uuidString)"
+        let offlineRootURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent(suiteName, isDirectory: true)
+        let entryID = UUID(uuidString: "BBBBBBBB-CCCC-DDDD-EEEE-FFFFFFFFFFFF")!
+        let userData = JellyfinUserData(
+            played: false,
+            playbackPositionTicks: 1_200_000_000,
+            lastPlayedDate: Date(timeIntervalSince1970: 1_000)
+        )
+        let entry = JellyfinOfflineEntry(
+            id: entryID,
+            serverID: account.serverID,
+            userID: account.userID,
+            accountDisplayTitle: account.displayTitle,
+            sourceLibraryName: "TV",
+            remoteItemID: "ep-1",
+            remoteItemKind: .episode,
+            title: "Episode 1",
+            episodeLabel: "S1E1 · Episode 1",
+            collectionTitle: "Frieren",
+            overview: nil,
+            seriesID: "series-1",
+            seriesTitle: "Frieren",
+            seasonID: "season-1",
+            seasonTitle: "Season 1",
+            seasonNumber: 1,
+            episodeNumber: 1,
+            productionYear: nil,
+            communityRating: nil,
+            runTimeTicks: 1_800_000_000,
+            videoRelativePath: "Entries/\(entryID.uuidString)/video.mp4",
+            posterRelativePath: nil,
+            backdropRelativePath: nil,
+            thumbnailRelativePath: nil,
+            seasonPosterRelativePath: nil,
+            subtitles: [],
+            localUserData: userData,
+            baselineUserData: userData,
+            lastSyncAt: Date(timeIntervalSince1970: 1_000)
+        )
+        try writeOfflineManifest(
+            entries: [entry],
+            offlineRootURL: offlineRootURL
+        )
+
+        let store = makeStore(
+            client: client,
+            offlineRootURL: offlineRootURL
+        )
+        store.accounts = [account]
+
+        store.setOfflinePlayedState(entryID: entryID, played: false)
+
+        let updatedEntry = try XCTUnwrap(store.offlineEntries.first)
+        XCTAssertEqual(updatedEntry.localUserData.playbackPositionSeconds, 0)
+        XCTAssertEqual(updatedEntry.syncState, .pendingUpload)
+
+        await store.syncOfflineEntriesIfPossible()
+
+        let syncedEntry = try XCTUnwrap(store.offlineEntries.first)
+        XCTAssertEqual(syncedEntry.syncState, .synced)
+        XCTAssertEqual(syncedEntry.baselineUserData.playbackPositionSeconds, 0)
+        let calls = await client.playedMutationCalls()
+        XCTAssertEqual(calls.0, [])
+        XCTAssertEqual(calls.1, ["ep-1"])
     }
 }

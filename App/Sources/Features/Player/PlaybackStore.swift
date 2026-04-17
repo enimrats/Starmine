@@ -27,6 +27,7 @@ final class PlaybackStore: ObservableObject {
 
     private let systemMediaController = SystemMediaController()
     private var currentScopedURL: URL?
+    private var currentScopedSubtitleURLs: [URL] = []
 
     init() {
         player.onSnapshot = { [weak self] snapshot in
@@ -86,6 +87,9 @@ final class PlaybackStore: ObservableObject {
 
     deinit {
         currentScopedURL?.stopAccessingSecurityScopedResource()
+        for url in currentScopedSubtitleURLs {
+            url.stopAccessingSecurityScopedResource()
+        }
     }
 
     var selectedAudioTrack: MediaTrackOption? {
@@ -96,24 +100,32 @@ final class PlaybackStore: ObservableObject {
         subtitleTracks.first(where: { $0.mpvID == selectedSubtitleTrackID })
     }
 
-    func openLocalVideo(_ url: URL) {
+    func openLocalVideo(
+        _ url: URL,
+        title: String? = nil,
+        episodeLabel: String = "",
+        collectionTitle: String? = nil,
+        externalSubtitles: [URL] = []
+    ) {
         currentScopedURL?.stopAccessingSecurityScopedResource()
         if url.startAccessingSecurityScopedResource() {
             currentScopedURL = url
         } else {
             currentScopedURL = nil
         }
+        stopAccessingScopedSubtitleURLs()
+        beginAccessingScopedSubtitleURLs(externalSubtitles)
 
         isPlayingRemote = false
         currentVideoURL = url
-        currentVideoTitle = url.lastPathComponent
-        currentEpisodeLabel = ""
-        currentCollectionTitle = nil
+        currentVideoTitle = title ?? url.lastPathComponent
+        currentEpisodeLabel = episodeLabel
+        currentCollectionTitle = collectionTitle
         fallbackCollectionTitle = nil
         resetTrackSelections()
         updateNavigation(previous: false, next: false)
         refreshSystemMediaState()
-        player.load(url)
+        player.load(url, externalSubtitles: externalSubtitles)
     }
 
     func beginRemotePlayback(
@@ -121,10 +133,12 @@ final class PlaybackStore: ObservableObject {
         title: String,
         episodeLabel: String,
         collectionTitle: String?,
-        resumePosition: Double?
+        resumePosition: Double?,
+        externalSubtitles: [URL] = []
     ) {
         currentScopedURL?.stopAccessingSecurityScopedResource()
         currentScopedURL = nil
+        stopAccessingScopedSubtitleURLs()
         currentVideoURL = session.streamURL
         currentVideoTitle = title
         currentEpisodeLabel = episodeLabel
@@ -133,7 +147,7 @@ final class PlaybackStore: ObservableObject {
         isPlayingRemote = true
         resetTrackSelections()
         refreshSystemMediaState()
-        player.load(session.streamURL)
+        player.load(session.streamURL, externalSubtitles: externalSubtitles)
 
         if let resumePosition, resumePosition > 1 {
             Task { [weak self] in
@@ -165,6 +179,7 @@ final class PlaybackStore: ObservableObject {
         player.stop()
         currentScopedURL?.stopAccessingSecurityScopedResource()
         currentScopedURL = nil
+        stopAccessingScopedSubtitleURLs()
         snapshot = PlaybackSnapshot()
         timebase = PlaybackTimebase()
         currentVideoURL = nil
@@ -209,6 +224,11 @@ final class PlaybackStore: ObservableObject {
         player.selectSubtitleTrack(id: id)
     }
 
+    func addExternalSubtitle(_ url: URL) {
+        beginAccessingScopedSubtitleURLs([url])
+        player.addExternalSubtitle(url)
+    }
+
     static func shouldSurfacePlayerError(_ message: String) -> Bool {
         let normalized = message.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !normalized.isEmpty else { return false }
@@ -235,6 +255,21 @@ final class PlaybackStore: ObservableObject {
         subtitleTracks = []
         selectedAudioTrackID = nil
         selectedSubtitleTrackID = nil
+    }
+
+    private func beginAccessingScopedSubtitleURLs(_ urls: [URL]) {
+        for url in urls {
+            if url.startAccessingSecurityScopedResource() {
+                currentScopedSubtitleURLs.append(url)
+            }
+        }
+    }
+
+    private func stopAccessingScopedSubtitleURLs() {
+        for url in currentScopedSubtitleURLs {
+            url.stopAccessingSecurityScopedResource()
+        }
+        currentScopedSubtitleURLs.removeAll()
     }
 
     private func refreshSystemMediaState() {
