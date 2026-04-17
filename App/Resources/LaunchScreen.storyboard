@@ -30,7 +30,7 @@
                                 <color key="textColor" red="0.13725490199999998" green="0.12549019609999998" blue="0.10588235289999999" alpha="1" colorSpace="custom" customColorSpace="sRGB"/>
                                 <nil key="highlightedColor"/>
                             </label>
-                            <label opaque="NO" userInteractionEnabled="NO" contentMode="left" text="Danmuku Media Player" textAlignment="center" lineBreakMode="tailTruncation" baselineAdjustment="alignBaselines" adjustsFontSizeToFit="NO" translatesAutoresizingMaskIntoConstraints="NO" id="6Yj-ur-vgH">
+                            <label opaque="NO" userInteractionEnabled="NO" contentMode="left" text="Danmaku Media Player" textAlignment="center" lineBreakMode="tailTruncation" baselineAdjustment="alignBaselines" adjustsFontSizeToFit="NO" translatesAutoresizingMaskIntoConstraints="NO" id="6Yj-ur-vgH">
                                 <rect key="frame" x="24" y="457" width="345" height="21"/>
                                 <fontDescription key="fontDescription" type="system" pointSize="17"/>
                                 <color key="textColor" red="0.43529411759999997" green="0.39607843140000004" blue="0.33333333330000003" alpha="1" colorSpace="custom" customColorSpace="sRGB"/>

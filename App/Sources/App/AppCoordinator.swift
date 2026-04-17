@@ -807,7 +807,22 @@ final class AppCoordinator: ObservableObject {
                 remoteEpisodeID: entry.remoteItemID
             )
             syncJellyfinNavigation()
-            await searchAndAutoloadDanmaku()
+            if
+                let danmakuURL = jellyfin.localDanmakuURL(for: entry),
+                let data = try? Data(contentsOf: danmakuURL),
+                let payload = try? JSONDecoder().decode(
+                    DanmakuOfflineCachePayload.self,
+                    from: data
+                )
+            {
+                danmaku.loadOfflineCache(
+                    payload,
+                    fallbackQuery: entry.seriesTitle ?? entry.title
+                )
+                await danmaku.persistCurrentRemoteMappingIfNeeded()
+            } else {
+                await searchAndAutoloadDanmaku()
+            }
         } catch {
             handleError(error)
         }

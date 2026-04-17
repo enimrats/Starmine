@@ -216,7 +216,25 @@ final class DanmakuFeatureStore: ObservableObject {
         renderer.clear()
     }
 
-    func searchAndAutoloadDanmaku() async throws -> AnimeEpisode? {
+    func loadOfflineCache(
+        _ payload: DanmakuOfflineCachePayload,
+        fallbackQuery: String? = nil
+    ) {
+        let query =
+            fallbackQuery?.trimmingCharacters(in: .whitespacesAndNewlines)
+                .nilIfEmpty
+            ?? payload.anime.title
+        searchQuery = query
+        searchResults = [payload.anime]
+        selectedAnimeID = payload.anime.id
+        episodes = [payload.episode]
+        selectedEpisodeID = payload.episode.id
+        renderer.load(payload.comments)
+    }
+
+    func searchAndAutoloadDanmaku(
+        persistRemoteMapping: Bool = true
+    ) async throws -> AnimeEpisode? {
         let keyword = searchQuery.trimmingCharacters(
             in: .whitespacesAndNewlines
         )
@@ -232,7 +250,8 @@ final class DanmakuFeatureStore: ObservableObject {
             do {
                 if let mappedEpisode = try await loadEpisodes(
                     for: mappedAnime,
-                    autoloadDanmaku: true
+                    autoloadDanmaku: true,
+                    persistRemoteMapping: persistRemoteMapping
                 ) {
                     return mappedEpisode
                 }
@@ -254,7 +273,11 @@ final class DanmakuFeatureStore: ObservableObject {
         }
 
         selectedAnimeID = bestMatch.id
-        return try await loadEpisodes(for: bestMatch, autoloadDanmaku: true)
+        return try await loadEpisodes(
+            for: bestMatch,
+            autoloadDanmaku: true,
+            persistRemoteMapping: persistRemoteMapping
+        )
     }
 
     func pickAnime(_ anime: AnimeSearchResult) async throws -> AnimeEpisode? {
@@ -268,6 +291,13 @@ final class DanmakuFeatureStore: ObservableObject {
         if let anime = selectedAnime {
             await persistRemoteMappingIfNeeded(anime: anime, episode: episode)
         }
+    }
+
+    func persistCurrentRemoteMappingIfNeeded() async {
+        guard let anime = selectedAnime, let episode = selectedEpisode else {
+            return
+        }
+        await persistRemoteMappingIfNeeded(anime: anime, episode: episode)
     }
 
     private func clearSelection(keepQuery: Bool) {
@@ -307,7 +337,8 @@ final class DanmakuFeatureStore: ObservableObject {
 
     private func loadEpisodes(
         for anime: AnimeSearchResult,
-        autoloadDanmaku: Bool
+        autoloadDanmaku: Bool,
+        persistRemoteMapping: Bool = true
     ) async throws -> AnimeEpisode? {
         let loadedEpisodes = try await client.loadEpisodes(for: anime.id)
         episodes = loadedEpisodes
@@ -318,10 +349,12 @@ final class DanmakuFeatureStore: ObservableObject {
         if let matchingEpisode {
             selectedEpisodeID = matchingEpisode.id
             try await loadDanmaku(for: matchingEpisode)
-            await persistRemoteMappingIfNeeded(
-                anime: anime,
-                episode: matchingEpisode
-            )
+            if persistRemoteMapping {
+                await persistRemoteMappingIfNeeded(
+                    anime: anime,
+                    episode: matchingEpisode
+                )
+            }
         } else {
             renderer.clear()
         }

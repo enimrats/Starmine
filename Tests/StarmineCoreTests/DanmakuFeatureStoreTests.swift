@@ -329,4 +329,164 @@ final class DanmakuFeatureStoreTests: XCTestCase {
         XCTAssertEqual(snapshot.episodeMappings["episode-2"]?.animeEpisodeID, 2)
         XCTAssertEqual(snapshot.episodeMappings["episode-2"]?.sourceEpisodeNumber, 2)
     }
+
+    func testSearchAndAutoloadCanSkipPersistingRemoteMappings() async throws {
+        let client = MockDandanplayClient(
+            searchResults: [
+                AnimeSearchResult(
+                    id: 100,
+                    title: "Frieren",
+                    typeDescription: "TV",
+                    imageURL: nil,
+                    episodeCount: 28
+                ),
+            ],
+            episodesByAnimeID: [
+                100: [
+                    AnimeEpisode(id: 1, number: 1, title: "旅立ち"),
+                    AnimeEpisode(id: 2, number: 2, title: "魔法使い"),
+                ],
+            ],
+            commentsByEpisodeID: [
+                2: [
+                    DanmakuComment(
+                        time: 1.0,
+                        text: "picked",
+                        presentation: .scroll,
+                        color: .white
+                    )
+                ],
+            ]
+        )
+        let mappingStore = DanmakuMatchMappingStore(
+            snapshot: DanmakuMatchMappingSnapshot()
+        )
+        let store = DanmakuFeatureStore(
+            client: client,
+            mappingStore: mappingStore
+        )
+        store.prepareSearch(
+            query: "Frieren",
+            inferredSeasonNumber: 1,
+            inferredEpisodeNumber: 2,
+            remoteSeriesID: "series-1",
+            remoteSeasonID: "season-1",
+            remoteEpisodeID: "episode-2"
+        )
+
+        let episode = try await store.searchAndAutoloadDanmaku(
+            persistRemoteMapping: false
+        )
+        let snapshot = await mappingStore.snapshotForTesting()
+
+        XCTAssertEqual(episode?.id, 2)
+        XCTAssertTrue(snapshot.animeMappings.isEmpty)
+        XCTAssertTrue(snapshot.episodeMappings.isEmpty)
+    }
+
+    func testOfflineCachePayloadRoundTripsThroughJSON() throws {
+        let payload = DanmakuOfflineCachePayload(
+            anime: AnimeSearchResult(
+                id: 100,
+                title: "Frieren",
+                typeDescription: "TV",
+                imageURL: nil,
+                episodeCount: 28
+            ),
+            episode: AnimeEpisode(id: 2, number: 2, title: "魔法使い"),
+            comments: [
+                DanmakuComment(
+                    time: 1.0,
+                    text: "cached",
+                    presentation: .scroll,
+                    color: .white
+                )
+            ]
+        )
+
+        let decoded = try JSONDecoder().decode(
+            DanmakuOfflineCachePayload.self,
+            from: JSONEncoder().encode(payload)
+        )
+
+        XCTAssertEqual(decoded.anime.id, payload.anime.id)
+        XCTAssertEqual(decoded.episode.id, payload.episode.id)
+        XCTAssertEqual(decoded.comments.map(\.text), ["cached"])
+    }
+
+    func testLoadOfflineCacheRestoresSelectionAndRenderer() {
+        let store = DanmakuFeatureStore(client: MockDandanplayClient())
+        let payload = DanmakuOfflineCachePayload(
+            anime: AnimeSearchResult(
+                id: 100,
+                title: "Frieren",
+                typeDescription: "TV",
+                imageURL: nil,
+                episodeCount: 28
+            ),
+            episode: AnimeEpisode(id: 2, number: 2, title: "魔法使い"),
+            comments: [
+                DanmakuComment(
+                    time: 1.0,
+                    text: "cached",
+                    presentation: .scroll,
+                    color: .white
+                )
+            ]
+        )
+
+        store.loadOfflineCache(payload, fallbackQuery: "葬送的芙莉莲")
+
+        XCTAssertEqual(store.searchQuery, "葬送的芙莉莲")
+        XCTAssertEqual(store.selectedAnimeID, 100)
+        XCTAssertEqual(store.selectedEpisodeID, 2)
+        store.renderer.sync(
+            playbackTime: 1.0,
+            viewportSize: CGSize(width: 1280, height: 720)
+        )
+        XCTAssertEqual(store.renderer.activeItems.map(\.comment.text), ["cached"])
+    }
+
+    func testPersistCurrentRemoteMappingPersistsOfflineCachedSelection()
+        async
+    {
+        let mappingStore = DanmakuMatchMappingStore(
+            snapshot: DanmakuMatchMappingSnapshot()
+        )
+        let store = DanmakuFeatureStore(
+            client: MockDandanplayClient(),
+            mappingStore: mappingStore
+        )
+        store.prepareSearch(
+            query: "Frieren",
+            inferredSeasonNumber: 1,
+            inferredEpisodeNumber: 2,
+            remoteSeriesID: "series-1",
+            remoteSeasonID: "season-1",
+            remoteEpisodeID: "episode-2"
+        )
+        store.loadOfflineCache(
+            DanmakuOfflineCachePayload(
+                anime: AnimeSearchResult(
+                    id: 100,
+                    title: "Frieren",
+                    typeDescription: "TV",
+                    imageURL: nil,
+                    episodeCount: 28
+                ),
+                episode: AnimeEpisode(id: 2, number: 2, title: "魔法使い"),
+                comments: []
+            )
+        )
+
+        await store.persistCurrentRemoteMappingIfNeeded()
+        let snapshot = await mappingStore.snapshotForTesting()
+
+        XCTAssertEqual(snapshot.animeMappings["series-1#season-1"]?.animeID, 100)
+        XCTAssertEqual(snapshot.episodeMappings["episode-2"]?.animeEpisodeID, 2)
+        XCTAssertEqual(
+            snapshot.episodeMappings["episode-2"]?.sourceEpisodeNumber,
+            2
+        )
+    }
 }

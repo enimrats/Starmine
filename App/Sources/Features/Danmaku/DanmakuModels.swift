@@ -7,7 +7,7 @@ import SwiftUI
     import UIKit
 #endif
 
-struct AnimeSearchResult: Identifiable, Hashable {
+struct AnimeSearchResult: Identifiable, Codable, Hashable {
     let id: Int
     let title: String
     let typeDescription: String
@@ -15,7 +15,7 @@ struct AnimeSearchResult: Identifiable, Hashable {
     let episodeCount: Int?
 }
 
-struct AnimeEpisode: Identifiable, Hashable {
+struct AnimeEpisode: Identifiable, Codable, Hashable {
     let id: Int
     let number: Int?
     let title: String
@@ -28,13 +28,13 @@ struct AnimeEpisode: Identifiable, Hashable {
     }
 }
 
-enum DanmakuPresentation: String, Hashable {
+enum DanmakuPresentation: String, Codable, Hashable {
     case scroll
     case top
     case bottom
 }
 
-struct DanmakuColor: Hashable {
+struct DanmakuColor: Codable, Hashable {
     let red: Double
     let green: Double
     let blue: Double
@@ -250,12 +250,18 @@ struct DanmakuRenderConfiguration: Codable, Hashable {
     }
 }
 
-struct DanmakuComment: Identifiable, Hashable {
-    let id = UUID()
+struct DanmakuComment: Identifiable, Codable, Hashable {
+    var id = UUID()
     let time: Double
     let text: String
     let presentation: DanmakuPresentation
     let color: DanmakuColor
+}
+
+struct DanmakuOfflineCachePayload: Codable, Hashable {
+    let anime: AnimeSearchResult
+    let episode: AnimeEpisode
+    let comments: [DanmakuComment]
 }
 
 enum DanmakuRegion: Hashable {

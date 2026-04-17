@@ -27,6 +27,10 @@ final class DanmakuRendererStore {
         self.configuration = configuration.clamped()
     }
 
+    var loadedComments: [DanmakuComment] {
+        comments
+    }
+
     func load(_ comments: [DanmakuComment]) {
         self.comments = comments.sorted(by: { $0.time < $1.time })
         activeItems = []

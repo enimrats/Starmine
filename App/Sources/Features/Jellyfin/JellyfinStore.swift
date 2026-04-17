@@ -121,6 +121,7 @@ final class JellyfinStore: ObservableObject {
     private let defaults: UserDefaults
     private let fileManager: FileManager
     private let offlineRootURL: URL
+    private let danmakuPrefetchStore: DanmakuFeatureStore
     private(set) var previousRemoteEpisode: JellyfinEpisode?
     private(set) var nextRemoteEpisode: JellyfinEpisode?
     private(set) var previousOfflineEntry: JellyfinOfflineEntry?
@@ -136,7 +137,8 @@ final class JellyfinStore: ObservableObject {
         client: any JellyfinClientProtocol = JellyfinClient.shared,
         defaults: UserDefaults = .standard,
         fileManager: FileManager = .default,
-        offlineRootURL: URL? = nil
+        offlineRootURL: URL? = nil,
+        danmakuPrefetchStore: DanmakuFeatureStore? = nil
     ) {
         self.client = client
         self.defaults = defaults
@@ -144,6 +146,9 @@ final class JellyfinStore: ObservableObject {
         self.offlineRootURL =
             offlineRootURL
             ?? JellyfinStore.makeDefaultOfflineRootURL(fileManager: fileManager)
+        self.danmakuPrefetchStore =
+            danmakuPrefetchStore
+            ?? DanmakuFeatureStore(userDefaults: defaults)
         loadOfflineEntries()
     }
 
@@ -1551,6 +1556,10 @@ extension JellyfinStore {
         }
     }
 
+    func localDanmakuURL(for entry: JellyfinOfflineEntry) -> URL? {
+        resolvedOfflineFileURL(relativePath: entry.danmakuRelativePath)
+    }
+
     func localArtworkURL(for entry: JellyfinOfflineEntry) -> URL? {
         resolvedOfflineFileURL(
             relativePath: entry.thumbnailRelativePath
@@ -2242,6 +2251,11 @@ extension JellyfinStore {
             fallbackName: "backdrop",
             to: entryDirectory
         )
+        let danmakuRelativePath = await cacheDanmakuPayload(
+            query: item.name,
+            remoteEpisodeID: item.id,
+            to: entryDirectory
+        )
 
         updateOfflineDownloadTask(
             id: job.taskID,
@@ -2290,6 +2304,12 @@ extension JellyfinStore {
             },
             thumbnailRelativePath: nil,
             seasonPosterRelativePath: nil,
+            danmakuRelativePath: danmakuRelativePath.map {
+                relativeOfflinePath(
+                    for: entryID,
+                    localURL: entryDirectory.appendingPathComponent($0)
+                )
+            },
             subtitles: subtitles.map { subtitle in
                 JellyfinOfflineSubtitle(
                     title: subtitle.title,
@@ -2313,9 +2333,6 @@ extension JellyfinStore {
         )
         offlineEntries.insert(entry, at: 0)
         saveOfflineEntries()
-
-        // TODO: Pre-cache danmaku payloads for offline Jellyfin entries once
-        // the danmaku subsystem gains a persistent comment cache.
     }
 
     fileprivate func performEpisodeDownload(
@@ -2418,6 +2435,15 @@ extension JellyfinStore {
             fallbackName: "season-poster",
             to: entryDirectory
         )
+        let danmakuRelativePath = await cacheDanmakuPayload(
+            query: episode.seriesName ?? episode.name,
+            inferredSeasonNumber: episode.parentIndexNumber ?? season?.indexNumber,
+            inferredEpisodeNumber: episode.danmakuEpisodeOrdinal,
+            remoteSeriesID: episode.seriesID ?? series?.id,
+            remoteSeasonID: episode.seasonID ?? season?.id,
+            remoteEpisodeID: episode.id,
+            to: entryDirectory
+        )
 
         updateOfflineDownloadTask(
             id: job.taskID,
@@ -2476,6 +2502,12 @@ extension JellyfinStore {
                     localURL: entryDirectory.appendingPathComponent($0)
                 )
             },
+            danmakuRelativePath: danmakuRelativePath.map {
+                relativeOfflinePath(
+                    for: entryID,
+                    localURL: entryDirectory.appendingPathComponent($0)
+                )
+            },
             subtitles: subtitles.map { subtitle in
                 JellyfinOfflineSubtitle(
                     title: subtitle.title,
@@ -2499,9 +2531,6 @@ extension JellyfinStore {
         )
         offlineEntries.insert(entry, at: 0)
         saveOfflineEntries()
-
-        // TODO: Pre-cache danmaku payloads for offline Jellyfin entries once
-        // the danmaku subsystem gains a persistent comment cache.
     }
 
     fileprivate func updateOfflineDownloadTask(
@@ -2721,6 +2750,61 @@ extension JellyfinStore {
         let destinationURL = directoryURL.appendingPathComponent(filename)
         try data.write(to: destinationURL, options: .atomic)
         return filename
+    }
+
+    func cacheDanmakuPayload(
+        query: String,
+        inferredSeasonNumber: Int? = nil,
+        inferredSeasonEpisodeCount: Int? = nil,
+        inferredEpisodeNumber: Int? = nil,
+        remoteSeriesID: String? = nil,
+        remoteSeasonID: String? = nil,
+        remoteEpisodeID: String? = nil,
+        to directoryURL: URL
+    ) async -> String? {
+        let trimmedQuery = query.trimmingCharacters(
+            in: .whitespacesAndNewlines
+        )
+        guard !trimmedQuery.isEmpty else { return nil }
+
+        danmakuPrefetchStore.prepareSearch(
+            query: trimmedQuery,
+            inferredSeasonNumber: inferredSeasonNumber,
+            inferredSeasonEpisodeCount: inferredSeasonEpisodeCount,
+            inferredEpisodeNumber: inferredEpisodeNumber,
+            remoteSeriesID: remoteSeriesID,
+            remoteSeasonID: remoteSeasonID,
+            remoteEpisodeID: remoteEpisodeID
+        )
+
+        defer { danmakuPrefetchStore.clearAll() }
+
+        do {
+            guard
+                let matchedEpisode =
+                    try await danmakuPrefetchStore.searchAndAutoloadDanmaku(
+                        persistRemoteMapping: false
+                    ),
+                let matchedAnime = danmakuPrefetchStore.selectedAnime
+            else {
+                return nil
+            }
+
+            let payload = DanmakuOfflineCachePayload(
+                anime: matchedAnime,
+                episode: matchedEpisode,
+                comments: danmakuPrefetchStore.renderer.loadedComments
+            )
+            let filename = "danmaku.json"
+            let destinationURL = directoryURL.appendingPathComponent(filename)
+            try JSONEncoder().encode(payload).write(
+                to: destinationURL,
+                options: .atomic
+            )
+            return filename
+        } catch {
+            return nil
+        }
     }
 
     fileprivate func fileSize(at url: URL) -> Int64? {

@@ -955,6 +955,7 @@ struct JellyfinOfflineEntry: Identifiable, Codable, Hashable {
     var backdropRelativePath: String?
     var thumbnailRelativePath: String?
     var seasonPosterRelativePath: String?
+    var danmakuRelativePath: String?
     var subtitles: [JellyfinOfflineSubtitle]
     var localUserData: JellyfinUserData
     var baselineUserData: JellyfinUserData
@@ -992,6 +993,7 @@ struct JellyfinOfflineEntry: Identifiable, Codable, Hashable {
         backdropRelativePath: String?,
         thumbnailRelativePath: String?,
         seasonPosterRelativePath: String?,
+        danmakuRelativePath: String? = nil,
         subtitles: [JellyfinOfflineSubtitle],
         localUserData: JellyfinUserData,
         baselineUserData: JellyfinUserData,
@@ -1028,6 +1030,7 @@ struct JellyfinOfflineEntry: Identifiable, Codable, Hashable {
         self.backdropRelativePath = backdropRelativePath
         self.thumbnailRelativePath = thumbnailRelativePath
         self.seasonPosterRelativePath = seasonPosterRelativePath
+        self.danmakuRelativePath = danmakuRelativePath
         self.subtitles = subtitles
         self.localUserData = localUserData
         self.baselineUserData = baselineUserData

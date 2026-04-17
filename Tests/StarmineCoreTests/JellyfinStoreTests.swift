@@ -212,7 +212,8 @@ actor PlaybackSessionGate {
 final class JellyfinStoreTests: XCTestCase {
     private func makeStore(
         client: any JellyfinClientProtocol,
-        offlineRootURL: URL? = nil
+        offlineRootURL: URL? = nil,
+        danmakuPrefetchStore: DanmakuFeatureStore? = nil
     ) -> JellyfinStore {
         let suiteName = "JellyfinStoreTests.\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: suiteName) ?? .standard
@@ -223,7 +224,8 @@ final class JellyfinStoreTests: XCTestCase {
             client: client,
             defaults: defaults,
             fileManager: .default,
-            offlineRootURL: resolvedOfflineRootURL
+            offlineRootURL: resolvedOfflineRootURL,
+            danmakuPrefetchStore: danmakuPrefetchStore
         )
     }
 
@@ -1397,5 +1399,76 @@ final class JellyfinStoreTests: XCTestCase {
         let calls = await client.playedMutationCalls()
         XCTAssertEqual(calls.0, [])
         XCTAssertEqual(calls.1, ["ep-1"])
+    }
+
+    func testCacheDanmakuPayloadWritesOfflinePayloadFile() async throws {
+        let mappingStore = DanmakuMatchMappingStore(
+            snapshot: DanmakuMatchMappingSnapshot()
+        )
+        let danmakuStore = DanmakuFeatureStore(
+            client: MockDandanplayClient(
+                searchResults: [
+                    AnimeSearchResult(
+                        id: 100,
+                        title: "Frieren",
+                        typeDescription: "TV",
+                        imageURL: nil,
+                        episodeCount: 28
+                    )
+                ],
+                episodesByAnimeID: [
+                    100: [
+                        AnimeEpisode(id: 2, number: 2, title: "魔法使い")
+                    ]
+                ],
+                commentsByEpisodeID: [
+                    2: [
+                        DanmakuComment(
+                            time: 1.0,
+                            text: "cached",
+                            presentation: .scroll,
+                            color: .white
+                        )
+                    ]
+                ]
+            ),
+            mappingStore: mappingStore
+        )
+        let store = makeStore(
+            client: MockJellyfinClient(),
+            danmakuPrefetchStore: danmakuStore
+        )
+        let cacheDirectory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(
+            at: cacheDirectory,
+            withIntermediateDirectories: true
+        )
+
+        let relativePath = await store.cacheDanmakuPayload(
+            query: "Frieren",
+            inferredSeasonNumber: 1,
+            inferredEpisodeNumber: 2,
+            remoteSeriesID: "series-1",
+            remoteSeasonID: "season-1",
+            remoteEpisodeID: "episode-2",
+            to: cacheDirectory
+        )
+
+        let payloadURL = try XCTUnwrap(
+            relativePath.map { cacheDirectory.appendingPathComponent($0) }
+        )
+        let payload = try JSONDecoder().decode(
+            DanmakuOfflineCachePayload.self,
+            from: Data(contentsOf: payloadURL)
+        )
+        let snapshot = await mappingStore.snapshotForTesting()
+
+        XCTAssertEqual(relativePath, "danmaku.json")
+        XCTAssertEqual(payload.anime.id, 100)
+        XCTAssertEqual(payload.episode.id, 2)
+        XCTAssertEqual(payload.comments.map(\.text), ["cached"])
+        XCTAssertTrue(snapshot.animeMappings.isEmpty)
+        XCTAssertTrue(snapshot.episodeMappings.isEmpty)
     }
 }
