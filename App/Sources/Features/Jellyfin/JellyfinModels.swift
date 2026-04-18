@@ -320,6 +320,7 @@ struct JellyfinAccountProfile: Identifiable, Codable, Hashable {
     var userID: String
     var accessToken: String
     var routes: [JellyfinRoute]
+    var manualRouteID: UUID?
     var lastSuccessfulRouteID: UUID?
     var lastConnectionAt: Date?
     var lastSelectedLibraryID: String?
@@ -332,6 +333,7 @@ struct JellyfinAccountProfile: Identifiable, Codable, Hashable {
         userID: String,
         accessToken: String,
         routes: [JellyfinRoute],
+        manualRouteID: UUID? = nil,
         lastSuccessfulRouteID: UUID? = nil,
         lastConnectionAt: Date? = nil,
         lastSelectedLibraryID: String? = nil
@@ -343,6 +345,7 @@ struct JellyfinAccountProfile: Identifiable, Codable, Hashable {
         self.userID = userID
         self.accessToken = accessToken
         self.routes = routes
+        self.manualRouteID = manualRouteID
         self.lastSuccessfulRouteID = lastSuccessfulRouteID
         self.lastConnectionAt = lastConnectionAt
         self.lastSelectedLibraryID = lastSelectedLibraryID
@@ -352,7 +355,21 @@ struct JellyfinAccountProfile: Identifiable, Codable, Hashable {
         "\(username) @ \(serverName)"
     }
 
+    var manualRoute: JellyfinRoute? {
+        guard let manualRouteID else { return nil }
+        return routes.first(where: {
+            $0.id == manualRouteID && $0.isEnabled
+        })
+    }
+
+    var usesAutomaticRouteSelection: Bool {
+        manualRoute == nil
+    }
+
     var activeRoute: JellyfinRoute? {
+        if let manualRoute {
+            return manualRoute
+        }
         if let lastSuccessfulRouteID,
             let route = routes.first(where: {
                 $0.id == lastSuccessfulRouteID && $0.isEnabled
@@ -360,21 +377,28 @@ struct JellyfinAccountProfile: Identifiable, Codable, Hashable {
         {
             return route
         }
-        return enabledRoutes.first
+        return automaticRoutes.first
     }
 
     var enabledRoutes: [JellyfinRoute] {
+        if let manualRoute {
+            return [manualRoute]
+        }
+        return automaticRoutes
+    }
+
+    var automaticRoutes: [JellyfinRoute] {
         routes
             .filter(\.isEnabled)
             .sorted { lhs, rhs in
+                if lhs.priority != rhs.priority {
+                    return lhs.priority < rhs.priority
+                }
                 if lhs.id == lastSuccessfulRouteID {
                     return true
                 }
                 if rhs.id == lastSuccessfulRouteID {
                     return false
-                }
-                if lhs.priority != rhs.priority {
-                    return lhs.priority < rhs.priority
                 }
                 switch (lhs.lastSuccessAt, rhs.lastSuccessAt) {
                 case let (left?, right?):
@@ -399,6 +423,18 @@ struct JellyfinAccountProfile: Identifiable, Codable, Hashable {
         }
         copy.lastSuccessfulRouteID = routeID
         copy.lastConnectionAt = date
+        return copy
+    }
+
+    func selectingManualRoute(_ routeID: UUID) -> JellyfinAccountProfile {
+        var copy = self
+        copy.manualRouteID = routeID
+        return copy
+    }
+
+    func selectingAutomaticRoute() -> JellyfinAccountProfile {
+        var copy = self
+        copy.manualRouteID = nil
         return copy
     }
 

@@ -286,6 +286,45 @@ final class AppCoordinator: ObservableObject {
             guard let self else { return }
             do {
                 try await self.jellyfin.switchRoute(routeID)
+                self.syncJellyfinNavigation()
+            } catch {
+                self.handleError(error)
+            }
+        }
+    }
+
+    func useAutomaticJellyfinRouteSelection() {
+        Task { [weak self] in
+            guard let self else { return }
+            do {
+                try await self.jellyfin.useAutomaticRouteSelection()
+                self.syncJellyfinNavigation()
+            } catch {
+                self.handleError(error)
+            }
+        }
+    }
+
+    func updateJellyfinRoutePriority(_ routeID: UUID, priority: Int) {
+        Task { [weak self] in
+            guard let self else { return }
+            do {
+                try await self.jellyfin.updateRoutePriority(
+                    routeID,
+                    priority: priority
+                )
+            } catch {
+                self.handleError(error)
+            }
+        }
+    }
+
+    func handleJellyfinAppDidBecomeActive() {
+        Task { [weak self] in
+            guard let self else { return }
+            do {
+                try await self.jellyfin.refreshRoutesAfterAppBecomesActive()
+                self.syncJellyfinNavigation()
             } catch {
                 self.handleError(error)
             }
@@ -807,8 +846,7 @@ final class AppCoordinator: ObservableObject {
                 remoteEpisodeID: entry.remoteItemID
             )
             syncJellyfinNavigation()
-            if
-                let danmakuURL = jellyfin.localDanmakuURL(for: entry),
+            if let danmakuURL = jellyfin.localDanmakuURL(for: entry),
                 let data = try? Data(contentsOf: danmakuURL),
                 let payload = try? JSONDecoder().decode(
                     DanmakuOfflineCachePayload.self,

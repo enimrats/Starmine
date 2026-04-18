@@ -16,6 +16,7 @@ private enum MobileRootTab: Hashable {
 }
 
 struct RootView: View {
+    @Environment(\.scenePhase) private var scenePhase
     @StateObject private var coordinator = AppCoordinator()
     @StateObject private var playbackHost = MPVVideoHostBridge()
     @State private var importerPresented = false
@@ -188,6 +189,10 @@ struct RootView: View {
             .onReceive(playback.$currentVideoTitle.removeDuplicates()) {
                 newValue in
                 currentPlaybackTitle = newValue
+            }
+            .onChange(of: scenePhase) { newValue in
+                guard newValue == .active else { return }
+                coordinator.handleJellyfinAppDidBecomeActive()
             }
             .onReceive(playback.$currentEpisodeLabel.removeDuplicates()) {
                 newValue in
@@ -1341,12 +1346,14 @@ struct RootView: View {
             }
             chromeButton(systemName: "gobackward") {
                 beginOptimisticSeek(
-                    to: displayedPlaybackPosition - playbackPreferences.seekInterval
+                    to: displayedPlaybackPosition
+                        - playbackPreferences.seekInterval
                 )
             }
             chromeButton(systemName: "goforward") {
                 beginOptimisticSeek(
-                    to: displayedPlaybackPosition + playbackPreferences.seekInterval
+                    to: displayedPlaybackPosition
+                        + playbackPreferences.seekInterval
                 )
             }
 
@@ -1899,7 +1906,8 @@ struct RootView: View {
     }
 
     private var currentPlaybackRate: Double {
-        let rate = playback.snapshot.loaded
+        let rate =
+            playback.snapshot.loaded
             ? playback.snapshot.playbackRate
             : playbackPreferences.playbackRate
         return PlaybackPreferences.clampedPlaybackRate(rate)
@@ -2070,10 +2078,11 @@ struct RootView: View {
         translationX: CGFloat,
         width: CGFloat
     ) {
-        guard let target = playbackSurfaceScrubTarget(
-            translationX: translationX,
-            width: width
-        )
+        guard
+            let target = playbackSurfaceScrubTarget(
+                translationX: translationX,
+                width: width
+            )
         else {
             return
         }
@@ -2087,10 +2096,11 @@ struct RootView: View {
         defer {
             surfaceScrubStartPosition = nil
         }
-        guard let target = playbackSurfaceScrubTarget(
-            translationX: translationX,
-            width: width
-        )
+        guard
+            let target = playbackSurfaceScrubTarget(
+                translationX: translationX,
+                width: width
+            )
         else {
             clearPendingSeek(syncTo: playback.snapshot.position)
             isScrubbing = false
@@ -2104,7 +2114,8 @@ struct RootView: View {
         width: CGFloat
     ) -> Double? {
         guard playback.snapshot.duration > 0, width > 1 else { return nil }
-        let anchorPosition = surfaceScrubStartPosition ?? displayedPlaybackPosition
+        let anchorPosition =
+            surfaceScrubStartPosition ?? displayedPlaybackPosition
         let progressDelta = Double(translationX / width)
         let deltaSeconds = progressDelta * playback.snapshot.duration
         return clampedSeekPosition(anchorPosition + deltaSeconds)

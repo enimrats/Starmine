@@ -15,6 +15,14 @@ protocol JellyfinClientProtocol {
         async throws -> JellyfinStoreSnapshot
     func switchRoute(accountID: UUID, routeID: UUID) async throws
         -> JellyfinStoreSnapshot
+    func useAutomaticRouteSelection(accountID: UUID) async throws
+        -> JellyfinStoreSnapshot
+    func updateRoutePriority(
+        accountID: UUID,
+        routeID: UUID,
+        priority: Int
+    ) async throws -> JellyfinStoreSnapshot
+    func reconcileRoutes(accountID: UUID) async -> JellyfinStoreSnapshot
     func rememberSelectedLibrary(accountID: UUID, libraryID: String?) async
         -> JellyfinStoreSnapshot
     func loadLibraries(accountID: UUID) async throws -> [JellyfinLibrary]
@@ -75,12 +83,18 @@ actor JellyfinClient: JellyfinClientProtocol {
     private static let clientDeviceID = "StarmineApple"
 
     private let session: URLSession
+    private let defaults: UserDefaults
     private var accounts: [JellyfinAccountProfile] = []
     private var activeAccountID: UUID?
     private var isLoaded = false
+    private var lastAutoRouteProbeAtByAccountID: [UUID: Date] = [:]
 
-    init(session: URLSession = .shared) {
+    init(
+        session: URLSession = .shared,
+        defaults: UserDefaults = .standard
+    ) {
         self.session = session
+        self.defaults = defaults
     }
 
     func snapshot() async -> JellyfinStoreSnapshot {
@@ -189,6 +203,7 @@ actor JellyfinClient: JellyfinClientProtocol {
             throw JellyfinClientError.accountNotFound
         }
         accounts.removeAll(where: { $0.id == accountID })
+        lastAutoRouteProbeAtByAccountID.removeValue(forKey: accountID)
         if activeAccountID == accountID {
             activeAccountID = accounts.first?.id
         }
@@ -260,8 +275,12 @@ actor JellyfinClient: JellyfinClientProtocol {
                 account: account,
                 route: route
             )
-            accounts[accountIndex] = account.markingRouteSuccess(route.id)
+            accounts[accountIndex] =
+                account
+                .selectingManualRoute(route.id)
+                .markingRouteSuccess(route.id)
             activeAccountID = accountID
+            lastAutoRouteProbeAtByAccountID.removeValue(forKey: accountID)
             await save()
             return storeSnapshot()
         } catch {
@@ -269,6 +288,67 @@ actor JellyfinClient: JellyfinClientProtocol {
             await save()
             throw error
         }
+    }
+
+    func useAutomaticRouteSelection(accountID: UUID) async throws
+        -> JellyfinStoreSnapshot
+    {
+        await ensureLoaded()
+        guard
+            let accountIndex = accounts.firstIndex(where: { $0.id == accountID }
+            )
+        else {
+            throw JellyfinClientError.accountNotFound
+        }
+
+        accounts[accountIndex] = accounts[accountIndex]
+            .selectingAutomaticRoute()
+        lastAutoRouteProbeAtByAccountID.removeValue(forKey: accountID)
+        await save()
+        return await reconcileAutomaticRoutes(accountID: accountID, force: true)
+    }
+
+    func updateRoutePriority(
+        accountID: UUID,
+        routeID: UUID,
+        priority: Int
+    ) async throws -> JellyfinStoreSnapshot {
+        await ensureLoaded()
+        guard
+            let accountIndex = accounts.firstIndex(where: { $0.id == accountID }
+            )
+        else {
+            throw JellyfinClientError.accountNotFound
+        }
+
+        var account = accounts[accountIndex]
+        guard
+            let routeIndex = account.routes.firstIndex(where: {
+                $0.id == routeID
+            })
+        else {
+            throw JellyfinClientError.routeNotFound
+        }
+
+        account.routes[routeIndex].priority = max(0, priority)
+        accounts[accountIndex] = account
+        lastAutoRouteProbeAtByAccountID.removeValue(forKey: accountID)
+
+        if account.usesAutomaticRouteSelection {
+            await save()
+            return await reconcileAutomaticRoutes(
+                accountID: accountID,
+                force: true
+            )
+        }
+
+        await save()
+        return storeSnapshot()
+    }
+
+    func reconcileRoutes(accountID: UUID) async -> JellyfinStoreSnapshot {
+        await ensureLoaded()
+        return await reconcileAutomaticRoutes(accountID: accountID)
     }
 
     func rememberSelectedLibrary(accountID: UUID, libraryID: String?) async
@@ -622,7 +702,6 @@ actor JellyfinClient: JellyfinClientProtocol {
         guard !isLoaded else { return }
         defer { isLoaded = true }
 
-        let defaults = UserDefaults.standard
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .millisecondsSince1970
         if let data = defaults.data(forKey: Self.accountsKey),
@@ -647,7 +726,6 @@ actor JellyfinClient: JellyfinClientProtocol {
     }
 
     private func save() async {
-        let defaults = UserDefaults.standard
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .millisecondsSince1970
         if let data = try? encoder.encode(accounts) {
@@ -752,48 +830,75 @@ actor JellyfinClient: JellyfinClientProtocol {
             throw JellyfinClientError.accountNotFound
         }
         var account = accounts[accountIndex]
-        let candidateRoutes = account.enabledRoutes
-        guard !candidateRoutes.isEmpty else {
+        let requestHeaders = [
+            "X-Emby-Authorization": authorizationHeader(
+                token: account.accessToken
+            ),
+            "Content-Type": method.uppercased() == "GET"
+                && body == nil ? nil : "application/json",
+        ].compactMapValues { $0 }
+        let candidateGroups = requestRouteGroups(for: account)
+        guard !candidateGroups.isEmpty else {
             throw JellyfinClientError.noAvailableRoute
         }
 
         var lastError: Error?
-        for route in candidateRoutes where route.shouldRetry() {
-            do {
-                let raw = try await rawRequest(
-                    baseURL: route.normalizedURL,
-                    path: path,
-                    method: method,
-                    headers: [
-                        "X-Emby-Authorization": authorizationHeader(
-                            token: account.accessToken
-                        ),
-                        "Content-Type": method.uppercased() == "GET"
-                            && body == nil ? nil : "application/json",
-                    ].compactMapValues { $0 },
-                    body: body
+        for candidateGroup in candidateGroups {
+            let routesToTry: [JellyfinRoute]
+            if account.usesAutomaticRouteSelection && candidateGroup.count > 1 {
+                let probeResult = await probeReachableRoutes(
+                    account: account,
+                    routes: candidateGroup
                 )
-                if raw.httpResponse.statusCode == 401
-                    || raw.httpResponse.statusCode == 403
-                {
-                    throw JellyfinClientError.authenticationExpired
+                let reachableRouteIDs = Set(
+                    probeResult.reachableRoutes.map(\.id)
+                )
+                let fallbackRoutes = candidateGroup.filter { route in
+                    !reachableRouteIDs.contains(route.id)
                 }
-                account = account.markingRouteSuccess(route.id)
-                accounts[accountIndex] = account
-                activeAccountID = accountID
-                await save()
-                return AuthenticatedResponse(
-                    data: raw.data,
-                    httpResponse: raw.httpResponse,
-                    profile: account,
-                    route: route
-                )
-            } catch JellyfinClientError.authenticationExpired {
-                throw JellyfinClientError.authenticationExpired
-            } catch {
-                lastError = error
-                account = account.markingRouteFailure(route.id)
-                accounts[accountIndex] = account
+                // Probe results only optimize ordering. If probing times out for
+                // every route, still try the real request path before declaring
+                // that the account has no usable automatic route.
+                routesToTry = probeResult.reachableRoutes + fallbackRoutes
+            } else {
+                routesToTry = candidateGroup
+            }
+
+            guard !routesToTry.isEmpty else {
+                continue
+            }
+
+            for route in routesToTry {
+                do {
+                    let raw = try await rawRequest(
+                        baseURL: route.normalizedURL,
+                        path: path,
+                        method: method,
+                        headers: requestHeaders,
+                        body: body
+                    )
+                    if raw.httpResponse.statusCode == 401
+                        || raw.httpResponse.statusCode == 403
+                    {
+                        throw JellyfinClientError.authenticationExpired
+                    }
+                    account = account.markingRouteSuccess(route.id)
+                    accounts[accountIndex] = account
+                    activeAccountID = accountID
+                    await save()
+                    return AuthenticatedResponse(
+                        data: raw.data,
+                        httpResponse: raw.httpResponse,
+                        profile: account,
+                        route: route
+                    )
+                } catch JellyfinClientError.authenticationExpired {
+                    throw JellyfinClientError.authenticationExpired
+                } catch {
+                    lastError = error
+                    account = account.markingRouteFailure(route.id)
+                    accounts[accountIndex] = account
+                }
             }
         }
 
@@ -802,6 +907,121 @@ actor JellyfinClient: JellyfinClientProtocol {
             throw lastError
         }
         throw JellyfinClientError.noAvailableRoute
+    }
+
+    private func requestRouteGroups(for account: JellyfinAccountProfile)
+        -> [[JellyfinRoute]]
+    {
+        if let manualRoute = account.manualRoute {
+            return [[manualRoute]]
+        }
+
+        let groupedRoutes = Dictionary(
+            grouping: account.automaticRoutes.filter { $0.shouldRetry() }
+        ) { $0.priority }
+        return groupedRoutes.keys.sorted().compactMap { priority in
+            guard let routes = groupedRoutes[priority], !routes.isEmpty else {
+                return nil
+            }
+            return routes
+        }
+    }
+
+    private func probeReachableRoutes(
+        account: JellyfinAccountProfile,
+        routes: [JellyfinRoute]
+    ) async -> JellyfinRouteProbeBatchResult {
+        let authorization = authorizationHeader(token: account.accessToken)
+        let routesByID = Dictionary(
+            uniqueKeysWithValues: routes.map { route in
+                (route.id, route)
+            }
+        )
+        let probeRequests: [JellyfinRouteProbeRequest] = routes.compactMap {
+            route in
+            guard
+                let url = buildURL(
+                    baseURL: route.normalizedURL,
+                    path: "/System/Info"
+                )
+            else {
+                return nil
+            }
+            return JellyfinRouteProbeRequest(
+                routeID: route.id,
+                priority: route.priority,
+                routeName: route.name,
+                url: url
+            )
+        }
+
+        var failedRouteIDs = Set(routes.map(\.id))
+        guard !probeRequests.isEmpty else {
+            return JellyfinRouteProbeBatchResult(
+                reachableRoutes: [],
+                failedRouteIDs: Array(failedRouteIDs)
+            )
+        }
+
+        let session = self.session
+        let successfulResults = await withTaskGroup(
+            of: JellyfinRouteProbeResult?.self,
+            returning: [JellyfinRouteProbeResult].self
+        ) { group in
+            for probe in probeRequests {
+                group.addTask {
+                    let duration = await Self.probeRoute(
+                        session: session,
+                        url: probe.url,
+                        authorization: authorization,
+                        timeoutInterval: 2.5
+                    )
+                    guard let duration else {
+                        return nil
+                    }
+                    return JellyfinRouteProbeResult(
+                        routeID: probe.routeID,
+                        priority: probe.priority,
+                        routeName: probe.routeName,
+                        duration: duration
+                    )
+                }
+            }
+
+            var results: [JellyfinRouteProbeResult] = []
+            for await result in group {
+                if let result {
+                    results.append(result)
+                }
+            }
+            return results
+        }
+
+        let reachableRoutes =
+            successfulResults
+            .sorted { lhs, rhs in
+                if abs(lhs.duration - rhs.duration) > 0.05 {
+                    return lhs.duration < rhs.duration
+                }
+                if lhs.routeID == account.lastSuccessfulRouteID {
+                    return true
+                }
+                if rhs.routeID == account.lastSuccessfulRouteID {
+                    return false
+                }
+                return lhs.routeName.localizedCaseInsensitiveCompare(
+                    rhs.routeName
+                ) == .orderedAscending
+            }
+            .compactMap { result in
+                failedRouteIDs.remove(result.routeID)
+                return routesByID[result.routeID]
+            }
+
+        return JellyfinRouteProbeBatchResult(
+            reachableRoutes: reachableRoutes,
+            failedRouteIDs: Array(failedRouteIDs)
+        )
     }
 
     private func publicRequest(baseURL: String, path: String) async throws
@@ -848,6 +1068,167 @@ actor JellyfinClient: JellyfinClientProtocol {
             )
         }
         return RawResponse(data: data, httpResponse: httpResponse)
+    }
+
+    private func reconcileAutomaticRoutes(
+        accountID: UUID,
+        force: Bool = false
+    ) async -> JellyfinStoreSnapshot {
+        guard
+            let accountIndex = accounts.firstIndex(where: { $0.id == accountID }
+            )
+        else {
+            return storeSnapshot()
+        }
+
+        let account = accounts[accountIndex]
+        guard account.usesAutomaticRouteSelection else {
+            return storeSnapshot()
+        }
+
+        let automaticRoutes = account.automaticRoutes
+        guard automaticRoutes.count > 1 else {
+            return storeSnapshot()
+        }
+
+        if !force,
+            let lastProbeAt = lastAutoRouteProbeAtByAccountID[accountID],
+            Date().timeIntervalSince(lastProbeAt) < 5
+        {
+            return storeSnapshot()
+        }
+
+        lastAutoRouteProbeAtByAccountID[accountID] = Date()
+
+        guard
+            let bestRouteID = await bestReachableAutomaticRouteID(for: account)
+        else {
+            return storeSnapshot()
+        }
+
+        let updatedAccount = account.markingRouteSuccess(bestRouteID)
+        guard updatedAccount != account else {
+            return storeSnapshot()
+        }
+
+        accounts[accountIndex] = updatedAccount
+        await save()
+        return storeSnapshot()
+    }
+
+    private func bestReachableAutomaticRouteID(
+        for account: JellyfinAccountProfile
+    ) async -> UUID? {
+        let authorization = authorizationHeader(token: account.accessToken)
+        let probeRequests: [JellyfinRouteProbeRequest] =
+            account.automaticRoutes.compactMap { route in
+                guard
+                    let url = buildURL(
+                        baseURL: route.normalizedURL,
+                        path: "/System/Info"
+                    )
+                else {
+                    return nil
+                }
+
+                return JellyfinRouteProbeRequest(
+                    routeID: route.id,
+                    priority: route.priority,
+                    routeName: route.name,
+                    url: url
+                )
+            }
+
+        guard !probeRequests.isEmpty else {
+            return nil
+        }
+
+        let session = self.session
+        let probeResults = await withTaskGroup(
+            of: JellyfinRouteProbeResult?.self,
+            returning: [JellyfinRouteProbeResult].self
+        ) { group in
+            for probe in probeRequests {
+                group.addTask {
+                    let duration = await Self.probeRoute(
+                        session: session,
+                        url: probe.url,
+                        authorization: authorization,
+                        timeoutInterval: 2.5
+                    )
+                    guard let duration else {
+                        return nil
+                    }
+                    return JellyfinRouteProbeResult(
+                        routeID: probe.routeID,
+                        priority: probe.priority,
+                        routeName: probe.routeName,
+                        duration: duration
+                    )
+                }
+            }
+
+            var results: [JellyfinRouteProbeResult] = []
+            for await result in group {
+                if let result {
+                    results.append(result)
+                }
+            }
+            return results
+        }
+
+        guard !probeResults.isEmpty else {
+            return nil
+        }
+
+        let bestPriority = probeResults.map { $0.priority }.min() ?? Int.max
+        let samePriorityResults = probeResults.filter {
+            $0.priority == bestPriority
+        }
+        let fastestResult = samePriorityResults.min { lhs, rhs in
+            if abs(lhs.duration - rhs.duration) > 0.05 {
+                return lhs.duration < rhs.duration
+            }
+            if lhs.routeID == account.lastSuccessfulRouteID {
+                return true
+            }
+            if rhs.routeID == account.lastSuccessfulRouteID {
+                return false
+            }
+            return lhs.routeName.localizedCaseInsensitiveCompare(
+                rhs.routeName
+            ) == .orderedAscending
+        }
+        return fastestResult?.routeID
+    }
+
+    private static func probeRoute(
+        session: URLSession,
+        url: URL,
+        authorization: String,
+        timeoutInterval: TimeInterval
+    ) async -> TimeInterval? {
+        var request = URLRequest(url: url)
+        request.httpMethod = "GET"
+        request.timeoutInterval = timeoutInterval
+        request.setValue(
+            authorization,
+            forHTTPHeaderField: "X-Emby-Authorization"
+        )
+
+        let startedAt = Date()
+        do {
+            let (_, response) = try await session.data(for: request)
+            guard let httpResponse = response as? HTTPURLResponse else {
+                return nil
+            }
+            guard (200..<300).contains(httpResponse.statusCode) else {
+                return nil
+            }
+            return Date().timeIntervalSince(startedAt)
+        } catch {
+            return nil
+        }
     }
 
     private func buildURL(baseURL: String, path: String) -> URL? {
@@ -980,6 +1361,25 @@ private struct JellyfinPublicInfo {
 private struct JellyfinAuthenticationResult {
     let userID: String
     let accessToken: String
+}
+
+private struct JellyfinRouteProbeRequest: Sendable {
+    let routeID: UUID
+    let priority: Int
+    let routeName: String
+    let url: URL
+}
+
+private struct JellyfinRouteProbeResult: Sendable {
+    let routeID: UUID
+    let priority: Int
+    let routeName: String
+    let duration: TimeInterval
+}
+
+private struct JellyfinRouteProbeBatchResult {
+    let reachableRoutes: [JellyfinRoute]
+    let failedRouteIDs: [UUID]
 }
 
 private struct RawResponse {

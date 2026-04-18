@@ -7,7 +7,7 @@ final class JellyfinModelsTests: XCTestCase {
     }
 
     func testEnabledRoutesPrioritizeLastSuccessfulRoute() {
-        let primary = JellyfinRoute(name: "公网", url: "https://a.example.com", priority: 5)
+        let primary = JellyfinRoute(name: "公网", url: "https://a.example.com", priority: 0)
         let fallback = JellyfinRoute(name: "内网", url: "http://10.0.0.2:8096", priority: 0)
         let account = JellyfinAccountProfile(
             serverID: "server",
@@ -20,6 +20,49 @@ final class JellyfinModelsTests: XCTestCase {
         )
 
         XCTAssertEqual(account.enabledRoutes.first?.id, primary.id)
+    }
+
+    func testManualRouteOverridesAutomaticSelection() {
+        let manual = JellyfinRoute(name: "内网", url: "http://10.0.0.2:8096", priority: 0)
+        let automatic = JellyfinRoute(name: "公网", url: "https://a.example.com", priority: 10)
+        let account = JellyfinAccountProfile(
+            serverID: "server",
+            serverName: "Jellyfin",
+            username: "alice",
+            userID: "user",
+            accessToken: "token",
+            routes: [manual, automatic],
+            manualRouteID: manual.id,
+            lastSuccessfulRouteID: automatic.id
+        )
+
+        XCTAssertFalse(account.usesAutomaticRouteSelection)
+        XCTAssertEqual(account.activeRoute?.id, manual.id)
+        XCTAssertEqual(account.enabledRoutes.map(\.id), [manual.id])
+    }
+
+    func testAutomaticRoutesPreferLowerPriorityOverPreviousSuccessfulRoute() {
+        let preferred = JellyfinRoute(
+            name: "内网",
+            url: "http://10.0.0.2:8096",
+            priority: 0
+        )
+        let previousSuccessful = JellyfinRoute(
+            name: "公网",
+            url: "https://a.example.com",
+            priority: 10
+        )
+        let account = JellyfinAccountProfile(
+            serverID: "server",
+            serverName: "Jellyfin",
+            username: "alice",
+            userID: "user",
+            accessToken: "token",
+            routes: [previousSuccessful, preferred],
+            lastSuccessfulRouteID: previousSuccessful.id
+        )
+
+        XCTAssertEqual(account.automaticRoutes.first?.id, preferred.id)
     }
 
     func testRouteRetryHonorsCooldownAfterRepeatedFailures() {

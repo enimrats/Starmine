@@ -160,6 +160,10 @@ final class JellyfinStore: ObservableObject {
         activeAccount?.activeRoute
     }
 
+    var usesAutomaticRouteSelection: Bool {
+        activeAccount?.usesAutomaticRouteSelection ?? true
+    }
+
     var homeAccount: JellyfinAccountProfile? {
         accounts.first(where: { $0.id == homeAccountID })
     }
@@ -284,7 +288,95 @@ final class JellyfinStore: ObservableObject {
             routeID: routeID
         )
         applySnapshot(snapshot)
-        try await refreshHome()
+        try await refreshContexts(
+            for: accountID,
+            reconcileRoutes: false
+        )
+        await syncOfflineEntriesIfPossible()
+    }
+
+    func useAutomaticRouteSelection() async throws {
+        guard let accountID = selectedAccountID else {
+            throw JellyfinClientError.accountNotFound
+        }
+
+        let snapshot = try await client.useAutomaticRouteSelection(
+            accountID: accountID
+        )
+        applySnapshot(snapshot)
+        try await refreshContexts(
+            for: accountID,
+            reconcileRoutes: false
+        )
+        await syncOfflineEntriesIfPossible()
+    }
+
+    func updateRoutePriority(_ routeID: UUID, priority: Int) async throws {
+        guard let accountID = selectedAccountID else {
+            throw JellyfinClientError.accountNotFound
+        }
+
+        let previousRouteID = activeRouteID(forAccountID: accountID)
+        let snapshot = try await client.updateRoutePriority(
+            accountID: accountID,
+            routeID: routeID,
+            priority: priority
+        )
+        applySnapshot(snapshot)
+        if activeRouteID(forAccountID: accountID) != previousRouteID {
+            try await refreshContexts(
+                for: accountID,
+                reconcileRoutes: false
+            )
+            await syncOfflineEntriesIfPossible()
+        }
+    }
+
+    func refreshRoutesAfterAppBecomesActive() async throws {
+        let currentBrowseAccountID = selectedAccountID
+        let currentHomeAccountID = homeAccountID
+
+        let browseRouteChanged =
+            if let currentBrowseAccountID {
+                await reconcileRoutesIfNeeded(
+                    for: currentBrowseAccountID,
+                    preservingSelectedAccountID: currentBrowseAccountID
+                )
+            } else {
+                false
+            }
+        let homeRouteChanged =
+            if let currentHomeAccountID {
+                if currentHomeAccountID == currentBrowseAccountID {
+                    browseRouteChanged
+                } else {
+                    await reconcileRoutesIfNeeded(
+                        for: currentHomeAccountID,
+                        preservingSelectedAccountID: currentBrowseAccountID
+                    )
+                }
+            } else {
+                false
+            }
+
+        if currentBrowseAccountID != nil,
+            browseRouteChanged
+                || (!libraries.isEmpty && items.isEmpty
+                    && selectedLibraryID != nil)
+        {
+            try await refreshLibrary(reconcilingRoutes: false)
+        }
+
+        if currentHomeAccountID != nil,
+            homeRouteChanged
+                || (resumeItems.isEmpty
+                    && recentItems.isEmpty
+                    && nextUpItems.isEmpty
+                    && recommendedItems.isEmpty)
+        {
+            try await refreshHome(reconcilingRoutes: false)
+        }
+
         await syncOfflineEntriesIfPossible()
     }
 
@@ -317,10 +409,18 @@ final class JellyfinStore: ObservableObject {
         await syncOfflineEntriesIfPossible()
     }
 
-    func refreshHome() async throws {
+    func refreshHome(reconcilingRoutes: Bool = true) async throws {
         guard let accountID = homeAccountID else {
             clearHomeState()
             return
+        }
+        let currentBrowseAccountID = selectedAccountID
+
+        if reconcilingRoutes {
+            _ = await reconcileRoutesIfNeeded(
+                for: accountID,
+                preservingSelectedAccountID: currentBrowseAccountID
+            )
         }
 
         isRefreshingHome = true
@@ -378,6 +478,12 @@ final class JellyfinStore: ObservableObject {
             errors.append(error)
         }
 
+        let snapshot = await client.snapshot()
+        applySnapshot(
+            snapshot,
+            preservingSelectedAccountID: currentBrowseAccountID
+        )
+
         if errors.count == 4, let firstError = errors.first {
             throw firstError
         }
@@ -393,10 +499,17 @@ final class JellyfinStore: ObservableObject {
         return accountID
     }
 
-    func refreshLibrary() async throws {
+    func refreshLibrary(reconcilingRoutes: Bool = true) async throws {
         guard let accountID = selectedAccountID else {
             clearBrowseState(clearLibraries: true)
             return
+        }
+
+        if reconcilingRoutes {
+            _ = await reconcileRoutesIfNeeded(
+                for: accountID,
+                preservingSelectedAccountID: accountID
+            )
         }
 
         isLoading = true
@@ -990,15 +1103,22 @@ final class JellyfinStore: ObservableObject {
         )
     }
 
-    private func applySnapshot(_ snapshot: JellyfinStoreSnapshot) {
+    private func applySnapshot(
+        _ snapshot: JellyfinStoreSnapshot,
+        preservingSelectedAccountID preferredSelectedAccountID: UUID? = nil
+    ) {
         accounts = snapshot.accounts
-        if let activeID = snapshot.activeAccountID,
-            snapshot.accounts.contains(where: { $0.id == activeID })
-        {
-            selectedAccountID = activeID
-        } else {
-            selectedAccountID = snapshot.accounts.first?.id
-        }
+        let resolvedSelectedAccountID =
+            preferredSelectedAccountID.flatMap { preferredID in
+                snapshot.accounts.contains(where: { $0.id == preferredID })
+                    ? preferredID : nil
+            }
+            ?? snapshot.activeAccountID.flatMap { activeID in
+                snapshot.accounts.contains(where: { $0.id == activeID })
+                    ? activeID : nil
+            }
+            ?? snapshot.accounts.first?.id
+        selectedAccountID = resolvedSelectedAccountID
 
         let persistedHomeAccountID =
             defaults.string(forKey: Self.homeAccountDefaultsKey)
@@ -1090,6 +1210,36 @@ final class JellyfinStore: ObservableObject {
         ].compactMap { $0 }
 
         return components.url
+    }
+
+    private func activeRouteID(forAccountID accountID: UUID?) -> UUID? {
+        guard let accountID else { return nil }
+        return accounts.first(where: { $0.id == accountID })?.activeRoute?.id
+    }
+
+    private func reconcileRoutesIfNeeded(
+        for accountID: UUID,
+        preservingSelectedAccountID preferredSelectedAccountID: UUID? = nil
+    ) async -> Bool {
+        let previousRouteID = activeRouteID(forAccountID: accountID)
+        let snapshot = await client.reconcileRoutes(accountID: accountID)
+        applySnapshot(
+            snapshot,
+            preservingSelectedAccountID: preferredSelectedAccountID
+        )
+        return previousRouteID != activeRouteID(forAccountID: accountID)
+    }
+
+    private func refreshContexts(
+        for accountID: UUID,
+        reconcileRoutes: Bool
+    ) async throws {
+        if selectedAccountID == accountID {
+            try await refreshLibrary(reconcilingRoutes: reconcileRoutes)
+        }
+        if homeAccountID == accountID {
+            try await refreshHome(reconcilingRoutes: reconcileRoutes)
+        }
     }
 
     private func loadItems(for libraryID: String, accountID: UUID) async throws
@@ -2437,7 +2587,8 @@ extension JellyfinStore {
         )
         let danmakuRelativePath = await cacheDanmakuPayload(
             query: episode.seriesName ?? episode.name,
-            inferredSeasonNumber: episode.parentIndexNumber ?? season?.indexNumber,
+            inferredSeasonNumber: episode.parentIndexNumber
+                ?? season?.indexNumber,
             inferredEpisodeNumber: episode.danmakuEpisodeOrdinal,
             remoteSeriesID: episode.seriesID ?? series?.id,
             remoteSeasonID: episode.seasonID ?? season?.id,

@@ -1,5 +1,13 @@
 import SwiftUI
 
+private struct JellyfinServerGroup: Identifiable {
+    let serverID: String
+    let serverName: String
+    let accounts: [JellyfinAccountProfile]
+
+    var id: String { serverID }
+}
+
 struct FilesWorkspaceView: View {
     @ObservedObject var coordinator: AppCoordinator
     @ObservedObject var jellyfin: JellyfinStore
@@ -59,23 +67,7 @@ struct FilesWorkspaceView: View {
                 offlineLibraryPanel
 
                 if !jellyfin.accounts.isEmpty {
-                    VStack(alignment: .leading, spacing: 14) {
-                        SectionHeader(
-                            title: "已连接的媒体库",
-                            systemImage: "server.rack"
-                        )
-
-                        LazyVGrid(
-                            columns: [
-                                GridItem(.adaptive(minimum: 280), spacing: 16)
-                            ],
-                            spacing: 16
-                        ) {
-                            ForEach(jellyfin.accounts) { account in
-                                jellyfinAccountButton(account)
-                            }
-                        }
-                    }
+                    jellyfinConnectionsTreePanel
                 }
 
                 jellyfinPanel
@@ -448,6 +440,321 @@ struct FilesWorkspaceView: View {
         .cardStyle()
     }
 
+    private var jellyfinConnectionsTreePanel: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            SectionHeader(
+                title: "已连接的媒体库",
+                systemImage: "server.rack"
+            )
+
+            ForEach(jellyfinServerGroups) { serverGroup in
+                jellyfinServerTreeCard(serverGroup)
+            }
+        }
+    }
+
+    private var jellyfinServerGroups: [JellyfinServerGroup] {
+        let groupedAccounts = Dictionary(grouping: jellyfin.accounts) {
+            $0.serverID
+        }
+        let activeServerID = coordinator.activeJellyfinAccount?.serverID
+
+        return groupedAccounts.keys.sorted { lhs, rhs in
+            if lhs == activeServerID {
+                return true
+            }
+            if rhs == activeServerID {
+                return false
+            }
+            let leftName = groupedAccounts[lhs]?.first?.serverName ?? lhs
+            let rightName = groupedAccounts[rhs]?.first?.serverName ?? rhs
+            return leftName.localizedCaseInsensitiveCompare(rightName)
+                == .orderedAscending
+        }
+        .compactMap { serverID in
+            guard let accounts = groupedAccounts[serverID], !accounts.isEmpty
+            else {
+                return nil
+            }
+
+            let sortedAccounts = accounts.sorted { lhs, rhs in
+                if lhs.id == jellyfin.selectedAccountID {
+                    return true
+                }
+                if rhs.id == jellyfin.selectedAccountID {
+                    return false
+                }
+                if lhs.id == jellyfin.homeAccountID {
+                    return true
+                }
+                if rhs.id == jellyfin.homeAccountID {
+                    return false
+                }
+                return lhs.username.localizedCaseInsensitiveCompare(
+                    rhs.username
+                ) == .orderedAscending
+            }
+
+            return JellyfinServerGroup(
+                serverID: serverID,
+                serverName: sortedAccounts.first?.serverName ?? "Jellyfin",
+                accounts: sortedAccounts
+            )
+        }
+    }
+
+    private func jellyfinServerTreeCard(
+        _ serverGroup: JellyfinServerGroup
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack(alignment: .center, spacing: 12) {
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .fill(Palette.accent.opacity(0.9))
+                    .frame(width: 50, height: 50)
+                    .overlay {
+                        Image(systemName: "server.rack")
+                            .font(.system(size: 19, weight: .bold))
+                            .foregroundStyle(.white)
+                    }
+
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(serverGroup.serverName)
+                        .font(
+                            .system(size: 17, weight: .bold, design: .rounded)
+                        )
+                        .foregroundStyle(Palette.ink)
+                        .lineLimit(1)
+                    Text("\(serverGroup.accounts.count) 个账号")
+                        .font(
+                            .system(size: 12, weight: .medium, design: .rounded)
+                        )
+                        .foregroundStyle(Palette.ink.opacity(0.55))
+                }
+
+                Spacer(minLength: 0)
+            }
+
+            VStack(alignment: .leading, spacing: 12) {
+                ForEach(serverGroup.accounts) { account in
+                    jellyfinAccountTreeNode(account)
+                }
+            }
+            .padding(.leading, 18)
+            .overlay(alignment: .leading) {
+                RoundedRectangle(cornerRadius: 1, style: .continuous)
+                    .fill(Palette.ink.opacity(0.12))
+                    .frame(width: 2)
+                    .padding(.vertical, 6)
+            }
+        }
+        .padding(16)
+        .background(
+            RoundedRectangle(cornerRadius: 24, style: .continuous)
+                .fill(Color.white.opacity(0.68))
+        )
+        .overlay {
+            RoundedRectangle(cornerRadius: 24, style: .continuous)
+                .strokeBorder(.white.opacity(0.8), lineWidth: 1)
+        }
+    }
+
+    private func jellyfinAccountTreeNode(_ account: JellyfinAccountProfile)
+        -> some View
+    {
+        let isActive = jellyfin.selectedAccountID == account.id
+        let isHome = jellyfin.homeAccountID == account.id
+
+        return VStack(alignment: .leading, spacing: 10) {
+            Button {
+                coordinator.switchJellyfinAccount(account.id)
+                workspaceSection = .library(account.id)
+            } label: {
+                HStack(alignment: .top, spacing: 12) {
+                    Circle()
+                        .fill(
+                            isActive
+                                ? Palette.accentDeep : Palette.ink.opacity(0.22)
+                        )
+                        .frame(width: 10, height: 10)
+                        .padding(.top, 7)
+
+                    VStack(alignment: .leading, spacing: 6) {
+                        HStack(spacing: 8) {
+                            Text(account.username)
+                                .font(
+                                    .system(
+                                        size: 15,
+                                        weight: .bold,
+                                        design: .rounded
+                                    )
+                                )
+                                .foregroundStyle(Palette.ink)
+                                .lineLimit(1)
+
+                            if isActive {
+                                jellyfinRouteBadge(
+                                    "当前浏览",
+                                    tint: Palette.accentDeep
+                                )
+                            }
+
+                            if isHome {
+                                jellyfinRouteBadge(
+                                    "主页",
+                                    tint: Palette.accent
+                                )
+                            }
+                        }
+
+                        Text(account.displayTitle)
+                            .font(
+                                .system(
+                                    size: 12,
+                                    weight: .medium,
+                                    design: .rounded
+                                )
+                            )
+                            .foregroundStyle(Palette.ink.opacity(0.55))
+                            .lineLimit(1)
+                    }
+
+                    Spacer(minLength: 12)
+
+                    VStack(alignment: .trailing, spacing: 6) {
+                        Text(
+                            account.usesAutomaticRouteSelection
+                                ? "自动"
+                                : "手动"
+                        )
+                        .font(
+                            .system(
+                                size: 11,
+                                weight: .bold,
+                                design: .rounded
+                            )
+                        )
+                        .foregroundStyle(
+                            account.usesAutomaticRouteSelection
+                                ? Palette.accentDeep
+                                : Palette.accent
+                        )
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 4)
+                        .background(
+                            Capsule(style: .continuous)
+                                .fill(
+                                    (account.usesAutomaticRouteSelection
+                                        ? Palette.selection
+                                        : Palette.accent.opacity(0.12))
+                                )
+                        )
+
+                        Text("\(account.routes.count) 条线路")
+                            .font(
+                                .system(
+                                    size: 11,
+                                    weight: .medium,
+                                    design: .rounded
+                                )
+                            )
+                            .foregroundStyle(Palette.ink.opacity(0.42))
+                    }
+                }
+                .padding(14)
+                .background(
+                    RoundedRectangle(cornerRadius: 18, style: .continuous)
+                        .fill(
+                            isActive
+                                ? Palette.selection
+                                : Color.white.opacity(0.78)
+                        )
+                )
+                .overlay {
+                    RoundedRectangle(cornerRadius: 18, style: .continuous)
+                        .strokeBorder(
+                            isActive
+                                ? Palette.accent.opacity(0.24)
+                                : .white.opacity(0.76),
+                            lineWidth: 1
+                        )
+                }
+            }
+            .buttonStyle(.plain)
+            .contextMenu {
+                Button(role: .destructive) {
+                    pendingJellyfinAccountRemoval = account
+                } label: {
+                    Label("删除媒体库", systemImage: "trash")
+                }
+            }
+
+            if isActive {
+                jellyfinActiveAccountRouteTree(account)
+            } else {
+                jellyfinInactiveRouteSummary(account)
+            }
+        }
+    }
+
+    private func jellyfinActiveAccountRouteTree(
+        _ account: JellyfinAccountProfile
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 10) {
+                Text("线路")
+                    .font(
+                        .system(size: 13, weight: .bold, design: .rounded)
+                    )
+                    .foregroundStyle(Palette.ink.opacity(0.82))
+
+                Spacer(minLength: 0)
+
+                Button {
+                    coordinator.useAutomaticJellyfinRouteSelection()
+                } label: {
+                    Label("自动选择", systemImage: "bolt.horizontal.circle")
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(Palette.accentDeep)
+                .disabled(jellyfin.usesAutomaticRouteSelection)
+            }
+
+            VStack(alignment: .leading, spacing: 10) {
+                ForEach(sortedJellyfinRoutes(for: account)) { route in
+                    jellyfinRouteTreeRow(route, account: account)
+                }
+            }
+            .padding(.leading, 18)
+            .overlay(alignment: .leading) {
+                RoundedRectangle(cornerRadius: 1, style: .continuous)
+                    .fill(Palette.ink.opacity(0.1))
+                    .frame(width: 2)
+                    .padding(.vertical, 4)
+            }
+        }
+        .padding(.leading, 22)
+    }
+
+    private func jellyfinInactiveRouteSummary(_ account: JellyfinAccountProfile)
+        -> some View
+    {
+        HStack(spacing: 10) {
+            Circle()
+                .fill(Palette.ink.opacity(0.16))
+                .frame(width: 8, height: 8)
+
+            Text(
+                account.activeRoute.map { route in
+                    "\(route.name) · 优先级 \(route.priority)"
+                } ?? "暂无可用线路"
+            )
+            .font(.system(size: 12, weight: .medium, design: .rounded))
+            .foregroundStyle(Palette.ink.opacity(0.5))
+            .lineLimit(1)
+        }
+        .padding(.leading, 24)
+    }
+
     @ViewBuilder
     private func jellyfinActionButton(
         title: String,
@@ -472,6 +779,178 @@ struct FilesWorkspaceView: View {
         }
     }
 
+    private func sortedJellyfinRoutes(for account: JellyfinAccountProfile)
+        -> [JellyfinRoute]
+    {
+        account.routes.sorted { lhs, rhs in
+            if lhs.priority != rhs.priority {
+                return lhs.priority < rhs.priority
+            }
+            if lhs.id == account.manualRouteID {
+                return true
+            }
+            if rhs.id == account.manualRouteID {
+                return false
+            }
+            return lhs.name.localizedCaseInsensitiveCompare(rhs.name)
+                == .orderedAscending
+        }
+    }
+
+    private func jellyfinRouteTreeRow(
+        _ route: JellyfinRoute,
+        account: JellyfinAccountProfile
+    ) -> some View {
+        let isActive = coordinator.activeJellyfinRoute?.id == route.id
+        let isManual = account.manualRouteID == route.id
+
+        return HStack(alignment: .top, spacing: 12) {
+            Circle()
+                .fill(
+                    isActive ? Palette.accentDeep : Palette.ink.opacity(0.18)
+                )
+                .frame(width: 8, height: 8)
+                .padding(.top, 9)
+
+            VStack(alignment: .leading, spacing: 10) {
+                HStack(alignment: .top, spacing: 12) {
+                    VStack(alignment: .leading, spacing: 6) {
+                        HStack(spacing: 8) {
+                            Text(route.name)
+                                .font(
+                                    .system(
+                                        size: 14,
+                                        weight: .bold,
+                                        design: .rounded
+                                    )
+                                )
+                                .foregroundStyle(Palette.ink)
+
+                            if isActive {
+                                jellyfinRouteBadge(
+                                    "当前",
+                                    tint: Palette.accentDeep
+                                )
+                            }
+
+                            if isManual {
+                                jellyfinRouteBadge("手动", tint: Palette.accent)
+                            }
+                        }
+
+                        Text(route.normalizedURL)
+                            .font(
+                                .system(
+                                    size: 11,
+                                    weight: .medium,
+                                    design: .monospaced
+                                )
+                            )
+                            .foregroundStyle(Palette.ink.opacity(0.52))
+                            .lineLimit(2)
+                    }
+
+                    Spacer(minLength: 12)
+
+                    Button {
+                        coordinator.switchJellyfinRoute(route.id)
+                    } label: {
+                        Text(isManual ? "已手动指定" : "切到此线路")
+                    }
+                    .buttonStyle(.bordered)
+                    .disabled(isManual)
+                }
+
+                HStack(spacing: 10) {
+                    Text("优先级")
+                        .font(
+                            .system(
+                                size: 12,
+                                weight: .semibold,
+                                design: .rounded
+                            )
+                        )
+                        .foregroundStyle(Palette.ink.opacity(0.62))
+
+                    Button {
+                        coordinator.updateJellyfinRoutePriority(
+                            route.id,
+                            priority: max(0, route.priority - 1)
+                        )
+                    } label: {
+                        Image(systemName: "minus.circle")
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(
+                        route.priority == 0
+                            ? Palette.ink.opacity(0.24)
+                            : Palette.ink
+                    )
+                    .disabled(route.priority == 0)
+
+                    Text("\(route.priority)")
+                        .font(
+                            .system(size: 13, weight: .bold, design: .rounded)
+                        )
+                        .foregroundStyle(Palette.ink)
+                        .frame(minWidth: 28)
+                        .monospacedDigit()
+
+                    Button {
+                        coordinator.updateJellyfinRoutePriority(
+                            route.id,
+                            priority: route.priority + 1
+                        )
+                    } label: {
+                        Image(systemName: "plus.circle")
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(Palette.ink)
+
+                    Spacer(minLength: 0)
+
+                    if let lastSuccessAt = route.lastSuccessAt {
+                        Text(
+                            "最近成功 \(lastSuccessAt.formatted(date: .abbreviated, time: .shortened))"
+                        )
+                        .font(
+                            .system(size: 11, weight: .medium, design: .rounded)
+                        )
+                        .foregroundStyle(Palette.ink.opacity(0.46))
+                    }
+                }
+            }
+            .padding(12)
+            .background(
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .fill(
+                        isActive
+                            ? Palette.selection
+                            : Color.white.opacity(0.62)
+                    )
+            )
+            .overlay {
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .strokeBorder(
+                        isActive
+                            ? Palette.accent.opacity(0.22)
+                            : .white.opacity(0.72),
+                        lineWidth: 1
+                    )
+            }
+        }
+    }
+
+    private func jellyfinRouteBadge(_ title: String, tint: Color) -> some View {
+        Text(title)
+            .font(.system(size: 10, weight: .bold, design: .rounded))
+            .foregroundStyle(tint)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 4)
+            .background(tint.opacity(0.12))
+            .clipShape(Capsule(style: .continuous))
+    }
+
     private var jellyfinAccountRemovalAlertPresented: Binding<Bool> {
         Binding(
             get: { pendingJellyfinAccountRemoval != nil },
@@ -481,62 +960,6 @@ struct FilesWorkspaceView: View {
                 }
             }
         )
-    }
-
-    private func jellyfinAccountButton(_ account: JellyfinAccountProfile)
-        -> some View
-    {
-        Button {
-            coordinator.switchJellyfinAccount(account.id)
-            workspaceSection = .library(account.id)
-        } label: {
-            HStack(spacing: 14) {
-                RoundedRectangle(cornerRadius: 16, style: .continuous)
-                    .fill(Palette.accent.opacity(0.88))
-                    .frame(width: 54, height: 54)
-                    .overlay {
-                        Image(systemName: "film.stack.fill")
-                            .font(.system(size: 20, weight: .bold))
-                            .foregroundStyle(.white)
-                    }
-
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(account.displayTitle)
-                        .font(
-                            .system(size: 16, weight: .bold, design: .rounded)
-                        )
-                        .foregroundStyle(Palette.ink)
-                        .lineLimit(1)
-                    Text(account.serverName)
-                        .font(
-                            .system(size: 12, weight: .medium, design: .rounded)
-                        )
-                        .foregroundStyle(Palette.ink.opacity(0.55))
-                        .lineLimit(1)
-                }
-                Spacer(minLength: 10)
-                Image(systemName: "chevron.right")
-                    .font(.system(size: 14, weight: .semibold))
-                    .foregroundStyle(Palette.ink.opacity(0.3))
-            }
-            .padding(12)
-            .background(
-                RoundedRectangle(cornerRadius: 20, style: .continuous)
-                    .fill(Color.white.opacity(0.6))
-            )
-            .overlay {
-                RoundedRectangle(cornerRadius: 20, style: .continuous)
-                    .strokeBorder(.white.opacity(0.8), lineWidth: 1)
-            }
-        }
-        .buttonStyle(.plain)
-        .contextMenu {
-            Button(role: .destructive) {
-                pendingJellyfinAccountRemoval = account
-            } label: {
-                Label("删除媒体库", systemImage: "trash")
-            }
-        }
     }
 
     private var filteredOfflineEntries: [JellyfinOfflineEntry] {

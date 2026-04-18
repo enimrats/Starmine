@@ -3,6 +3,10 @@ import XCTest
 
 actor MockJellyfinClient: JellyfinClientProtocol {
     let snapshotValue: JellyfinStoreSnapshot
+    let switchRouteSnapshotValue: JellyfinStoreSnapshot?
+    let automaticRouteSnapshotValue: JellyfinStoreSnapshot?
+    let routePrioritySnapshotValue: JellyfinStoreSnapshot?
+    let reconciledSnapshotsByAccountID: [UUID: JellyfinStoreSnapshot]
     let librariesByAccountID: [UUID: [JellyfinLibrary]]
     let itemsByLibraryID: [String: [JellyfinMediaItem]]
     let seasonsBySeriesID: [String: [JellyfinSeason]]
@@ -17,6 +21,7 @@ actor MockJellyfinClient: JellyfinClientProtocol {
     let createPlaybackSessionHandler:
         (@Sendable (UUID, String, String?) async throws -> JellyfinPlaybackSession)?
     var lastRememberedLibraryID: String?
+    private(set) var reconciledAccountIDs: [UUID] = []
     private(set) var startedPlaybackCount = 0
     private(set) var progressPlaybackCount = 0
     private(set) var stoppedPlaybackCount = 0
@@ -25,6 +30,10 @@ actor MockJellyfinClient: JellyfinClientProtocol {
 
     init(
         snapshotValue: JellyfinStoreSnapshot = .init(accounts: [], activeAccountID: nil),
+        switchRouteSnapshotValue: JellyfinStoreSnapshot? = nil,
+        automaticRouteSnapshotValue: JellyfinStoreSnapshot? = nil,
+        routePrioritySnapshotValue: JellyfinStoreSnapshot? = nil,
+        reconciledSnapshotsByAccountID: [UUID: JellyfinStoreSnapshot] = [:],
         librariesByAccountID: [UUID: [JellyfinLibrary]] = [:],
         itemsByLibraryID: [String: [JellyfinMediaItem]] = [:],
         seasonsBySeriesID: [String: [JellyfinSeason]] = [:],
@@ -42,6 +51,10 @@ actor MockJellyfinClient: JellyfinClientProtocol {
         )? = nil
     ) {
         self.snapshotValue = snapshotValue
+        self.switchRouteSnapshotValue = switchRouteSnapshotValue
+        self.automaticRouteSnapshotValue = automaticRouteSnapshotValue
+        self.routePrioritySnapshotValue = routePrioritySnapshotValue
+        self.reconciledSnapshotsByAccountID = reconciledSnapshotsByAccountID
         self.librariesByAccountID = librariesByAccountID
         self.itemsByLibraryID = itemsByLibraryID
         self.seasonsBySeriesID = seasonsBySeriesID
@@ -77,7 +90,20 @@ actor MockJellyfinClient: JellyfinClientProtocol {
     }
 
     func switchRoute(accountID: UUID, routeID: UUID) async throws -> JellyfinStoreSnapshot {
-        snapshotValue
+        switchRouteSnapshotValue ?? snapshotValue
+    }
+
+    func useAutomaticRouteSelection(accountID: UUID) async throws -> JellyfinStoreSnapshot {
+        automaticRouteSnapshotValue ?? snapshotValue
+    }
+
+    func updateRoutePriority(accountID: UUID, routeID: UUID, priority: Int) async throws -> JellyfinStoreSnapshot {
+        routePrioritySnapshotValue ?? snapshotValue
+    }
+
+    func reconcileRoutes(accountID: UUID) async -> JellyfinStoreSnapshot {
+        reconciledAccountIDs.append(accountID)
+        return reconciledSnapshotsByAccountID[accountID] ?? snapshotValue
     }
 
     func rememberSelectedLibrary(accountID: UUID, libraryID: String?) async -> JellyfinStoreSnapshot {
@@ -164,6 +190,10 @@ actor MockJellyfinClient: JellyfinClientProtocol {
 
     func rememberedLibraryID() async -> String? {
         lastRememberedLibraryID
+    }
+
+    func reconciledAccounts() async -> [UUID] {
+        reconciledAccountIDs
     }
 
     func playbackReportCounts() async -> (Int, Int, Int) {
@@ -529,6 +559,389 @@ final class JellyfinStoreTests: XCTestCase {
         XCTAssertEqual(store.recentItems.map(\.id), ["recent-1"])
         XCTAssertEqual(store.nextUpItems.map(\.id), ["next-1"])
         XCTAssertEqual(store.recommendedItems.map(\.id), ["rec-1"])
+    }
+
+    func testSwitchRouteRefreshesBrowseAndHomeContexts() async throws {
+        let accountID = UUID()
+        let oldRoute = JellyfinRoute(
+            id: UUID(),
+            name: "内网",
+            url: "http://10.0.0.2:8096",
+            priority: 0
+        )
+        let newRoute = JellyfinRoute(
+            id: UUID(),
+            name: "公网",
+            url: "https://a.example.com",
+            priority: 10
+        )
+        let updatedAccount = JellyfinAccountProfile(
+            id: accountID,
+            serverID: "server",
+            serverName: "Jellyfin",
+            username: "alice",
+            userID: "user",
+            accessToken: "token",
+            routes: [oldRoute, newRoute],
+            manualRouteID: newRoute.id,
+            lastSuccessfulRouteID: newRoute.id,
+            lastSelectedLibraryID: "tv"
+        )
+        let library = JellyfinLibrary(
+            payload: ["Id": "tv", "Name": "TV", "CollectionType": "tvshows"]
+        )
+        let refreshedItem = JellyfinMediaItem(
+            payload: ["Id": "movie-1", "Name": "Paprika", "Type": "Movie"]
+        )
+        let refreshedResume = JellyfinHomeItem(
+            payload: [
+                "Id": "resume-1",
+                "Name": "Episode 1",
+                "Type": "Episode",
+                "SeriesName": "Frieren",
+                "SeriesId": "series-1",
+                "SeasonId": "season-1",
+                "IndexNumber": 1,
+                "ParentIndexNumber": 1,
+            ]
+        )
+        let client = MockJellyfinClient(
+            snapshotValue: JellyfinStoreSnapshot(
+                accounts: [updatedAccount],
+                activeAccountID: accountID
+            ),
+            switchRouteSnapshotValue: JellyfinStoreSnapshot(
+                accounts: [updatedAccount],
+                activeAccountID: accountID
+            ),
+            librariesByAccountID: [accountID: [library]],
+            itemsByLibraryID: ["tv": [refreshedItem]],
+            resumeItemsByAccountID: [accountID: [refreshedResume]]
+        )
+
+        let store = makeStore(client: client)
+        store.accounts = [
+            JellyfinAccountProfile(
+                id: accountID,
+                serverID: "server",
+                serverName: "Jellyfin",
+                username: "alice",
+                userID: "user",
+                accessToken: "token",
+                routes: [oldRoute, newRoute],
+                lastSuccessfulRouteID: oldRoute.id,
+                lastSelectedLibraryID: "tv"
+            )
+        ]
+        store.selectedAccountID = accountID
+        store.homeAccountID = accountID
+        store.selectedLibraryID = "tv"
+        store.items = [
+            JellyfinMediaItem(
+                payload: ["Id": "old-item", "Name": "Old", "Type": "Movie"]
+            )
+        ]
+        store.resumeItems = [
+            JellyfinHomeItem(
+                payload: [
+                    "Id": "old-resume",
+                    "Name": "Old Episode",
+                    "Type": "Episode",
+                    "SeriesName": "Old",
+                ]
+            )
+        ]
+
+        try await store.switchRoute(newRoute.id)
+
+        XCTAssertEqual(store.activeRoute?.id, newRoute.id)
+        XCTAssertEqual(store.items.map(\.id), ["movie-1"])
+        XCTAssertEqual(store.resumeItems.map(\.id), ["resume-1"])
+    }
+
+    func testRefreshHomeAppliesReconciledRouteSnapshot() async throws {
+        let accountID = UUID()
+        let internalRoute = JellyfinRoute(
+            id: UUID(),
+            name: "内网",
+            url: "http://10.0.0.2:8096",
+            priority: 0
+        )
+        let externalRoute = JellyfinRoute(
+            id: UUID(),
+            name: "公网",
+            url: "https://a.example.com",
+            priority: 10
+        )
+        let oldAccount = JellyfinAccountProfile(
+            id: accountID,
+            serverID: "server",
+            serverName: "Jellyfin",
+            username: "alice",
+            userID: "user",
+            accessToken: "token",
+            routes: [internalRoute, externalRoute],
+            lastSuccessfulRouteID: externalRoute.id
+        )
+        let updatedAccount = JellyfinAccountProfile(
+            id: accountID,
+            serverID: "server",
+            serverName: "Jellyfin",
+            username: "alice",
+            userID: "user",
+            accessToken: "token",
+            routes: [internalRoute, externalRoute],
+            lastSuccessfulRouteID: internalRoute.id
+        )
+        let refreshedResume = JellyfinHomeItem(
+            payload: [
+                "Id": "resume-1",
+                "Name": "Episode 1",
+                "Type": "Episode",
+                "SeriesName": "Frieren",
+                "SeriesId": "series-1",
+                "SeasonId": "season-1",
+                "IndexNumber": 1,
+                "ParentIndexNumber": 1,
+            ]
+        )
+        let client = MockJellyfinClient(
+            snapshotValue: JellyfinStoreSnapshot(
+                accounts: [updatedAccount],
+                activeAccountID: accountID
+            ),
+            reconciledSnapshotsByAccountID: [
+                accountID: JellyfinStoreSnapshot(
+                    accounts: [updatedAccount],
+                    activeAccountID: accountID
+                )
+            ],
+            resumeItemsByAccountID: [accountID: [refreshedResume]]
+        )
+
+        let store = makeStore(client: client)
+        store.accounts = [oldAccount]
+        store.homeAccountID = accountID
+
+        try await store.refreshHome()
+
+        XCTAssertEqual(store.homeRoute?.id, internalRoute.id)
+        XCTAssertEqual(store.resumeItems.map(\.id), ["resume-1"])
+        let reconciledAccounts = await client.reconciledAccounts()
+        XCTAssertEqual(reconciledAccounts, [accountID])
+    }
+
+    func testRefreshHomeKeepsBrowseSelectionWhenHomeAccountDiffers()
+        async throws
+    {
+        let browseAccountID = UUID()
+        let homeAccountID = UUID()
+        let browseAccount = JellyfinAccountProfile(
+            id: browseAccountID,
+            serverID: "browse-server",
+            serverName: "Browse",
+            username: "browse",
+            userID: "browse-user",
+            accessToken: "browse-token",
+            routes: [JellyfinRoute(name: "browse", url: "http://browse.local")],
+            lastSelectedLibraryID: "browse-library"
+        )
+        let homeAccount = JellyfinAccountProfile(
+            id: homeAccountID,
+            serverID: "home-server",
+            serverName: "Home",
+            username: "home",
+            userID: "home-user",
+            accessToken: "home-token",
+            routes: [JellyfinRoute(name: "home", url: "http://home.local")]
+        )
+        let homeResume = JellyfinHomeItem(
+            payload: [
+                "Id": "home-resume-1",
+                "Name": "Home Episode",
+                "Type": "Episode",
+                "SeriesName": "Home Series",
+            ]
+        )
+        let browseLibrary = JellyfinLibrary(
+            payload: [
+                "Id": "browse-library",
+                "Name": "Browse",
+                "CollectionType": "movies",
+            ]
+        )
+        let browseItem = JellyfinMediaItem(
+            payload: [
+                "Id": "browse-item-1",
+                "Name": "Browse Item",
+                "Type": "Movie",
+            ]
+        )
+        let client = MockJellyfinClient(
+            snapshotValue: JellyfinStoreSnapshot(
+                accounts: [browseAccount, homeAccount],
+                activeAccountID: homeAccountID
+            ),
+            resumeItemsByAccountID: [homeAccountID: [homeResume]]
+        )
+
+        let store = makeStore(client: client)
+        store.accounts = [browseAccount, homeAccount]
+        store.selectedAccountID = browseAccountID
+        store.homeAccountID = homeAccountID
+        store.libraries = [browseLibrary]
+        store.selectedLibraryID = browseLibrary.id
+        store.items = [browseItem]
+
+        try await store.refreshHome(reconcilingRoutes: false)
+
+        XCTAssertEqual(store.selectedAccountID, browseAccountID)
+        XCTAssertEqual(store.homeAccountID, homeAccountID)
+        XCTAssertEqual(store.items.map(\.id), ["browse-item-1"])
+        XCTAssertEqual(store.resumeItems.map(\.id), ["home-resume-1"])
+    }
+
+    func testRefreshRoutesAfterForegroundRefreshesCapturedBrowseAccount()
+        async throws
+    {
+        let browseAccountID = UUID()
+        let homeAccountID = UUID()
+        let browseOldRoute = JellyfinRoute(
+            id: UUID(),
+            name: "内网",
+            url: "http://10.0.0.2:8096",
+            priority: 0
+        )
+        let browseNewRoute = JellyfinRoute(
+            id: UUID(),
+            name: "公网",
+            url: "https://browse.example.com",
+            priority: 10
+        )
+        let homeRoute = JellyfinRoute(
+            id: UUID(),
+            name: "home",
+            url: "http://home.local",
+            priority: 0
+        )
+        let browseAccountBefore = JellyfinAccountProfile(
+            id: browseAccountID,
+            serverID: "browse-server",
+            serverName: "Browse",
+            username: "browse",
+            userID: "browse-user",
+            accessToken: "browse-token",
+            routes: [browseOldRoute, browseNewRoute],
+            lastSuccessfulRouteID: browseOldRoute.id,
+            lastSelectedLibraryID: "browse-library"
+        )
+        let browseAccountAfter = JellyfinAccountProfile(
+            id: browseAccountID,
+            serverID: "browse-server",
+            serverName: "Browse",
+            username: "browse",
+            userID: "browse-user",
+            accessToken: "browse-token",
+            routes: [browseOldRoute, browseNewRoute],
+            lastSuccessfulRouteID: browseNewRoute.id,
+            lastSelectedLibraryID: "browse-library"
+        )
+        let homeAccount = JellyfinAccountProfile(
+            id: homeAccountID,
+            serverID: "home-server",
+            serverName: "Home",
+            username: "home",
+            userID: "home-user",
+            accessToken: "home-token",
+            routes: [homeRoute],
+            lastSuccessfulRouteID: homeRoute.id,
+            lastSelectedLibraryID: "home-library"
+        )
+        let browseLibrary = JellyfinLibrary(
+            payload: [
+                "Id": "browse-library",
+                "Name": "Browse",
+                "CollectionType": "movies",
+            ]
+        )
+        let homeLibrary = JellyfinLibrary(
+            payload: [
+                "Id": "home-library",
+                "Name": "Home",
+                "CollectionType": "movies",
+            ]
+        )
+        let browseItem = JellyfinMediaItem(
+            payload: [
+                "Id": "browse-item-1",
+                "Name": "Browse Item",
+                "Type": "Movie",
+            ]
+        )
+        let homeItem = JellyfinMediaItem(
+            payload: [
+                "Id": "home-item-1",
+                "Name": "Home Item",
+                "Type": "Movie",
+            ]
+        )
+        let reconciledSnapshot = JellyfinStoreSnapshot(
+            accounts: [browseAccountAfter, homeAccount],
+            activeAccountID: homeAccountID
+        )
+        let postRefreshSnapshot = JellyfinStoreSnapshot(
+            accounts: [browseAccountAfter, homeAccount],
+            activeAccountID: browseAccountID
+        )
+        let client = MockJellyfinClient(
+            snapshotValue: postRefreshSnapshot,
+            reconciledSnapshotsByAccountID: [
+                browseAccountID: reconciledSnapshot,
+                homeAccountID: reconciledSnapshot,
+            ],
+            librariesByAccountID: [
+                browseAccountID: [browseLibrary],
+                homeAccountID: [homeLibrary],
+            ],
+            itemsByLibraryID: [
+                browseLibrary.id: [browseItem],
+                homeLibrary.id: [homeItem],
+            ]
+        )
+
+        let store = makeStore(client: client)
+        store.accounts = [browseAccountBefore, homeAccount]
+        store.selectedAccountID = browseAccountID
+        store.homeAccountID = homeAccountID
+        store.libraries = [browseLibrary]
+        store.selectedLibraryID = browseLibrary.id
+        store.items = [
+            JellyfinMediaItem(
+                payload: [
+                    "Id": "stale-item",
+                    "Name": "Stale",
+                    "Type": "Movie",
+                ]
+            )
+        ]
+        store.resumeItems = [
+            JellyfinHomeItem(
+                payload: [
+                    "Id": "home-seed",
+                    "Name": "Seed",
+                    "Type": "Episode",
+                    "SeriesName": "Seed Series",
+                ]
+            )
+        ]
+
+        try await store.refreshRoutesAfterAppBecomesActive()
+
+        XCTAssertEqual(store.selectedAccountID, browseAccountID)
+        XCTAssertEqual(store.selectedLibraryID, browseLibrary.id)
+        XCTAssertEqual(store.items.map(\.id), ["browse-item-1"])
+        let reconciledAccounts = await client.reconciledAccounts()
+        XCTAssertEqual(reconciledAccounts, [browseAccountID, homeAccountID])
     }
 
     func testPlaybackTrackingUpdatesResumeItemsAndReportsLifecycle() async throws {
