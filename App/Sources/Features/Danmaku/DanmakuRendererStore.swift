@@ -14,6 +14,8 @@ final class DanmakuRendererStore {
 
     private(set) var configuration: DanmakuRenderConfiguration
     private(set) var contentVersion: UInt64 = 0
+    private(set) var lastViewportSize: CGSize = .zero
+    private(set) var lastMetrics: DanmakuLayoutMetrics = .playbackChrome
 
     private var comments: [DanmakuComment] = []
     private var nextIndex = 0
@@ -40,6 +42,8 @@ final class DanmakuRendererStore {
         topLanes = []
         bottomLanes = []
         lastLayoutSignature = nil
+        lastViewportSize = .zero
+        lastMetrics = .playbackChrome
         bumpContentVersion()
     }
 
@@ -75,6 +79,9 @@ final class DanmakuRendererStore {
             }
             return false
         }
+
+        lastViewportSize = viewportSize
+        lastMetrics = metrics
 
         let lanePlan = resolvedLanePlan(
             for: viewportSize,

@@ -46,6 +46,25 @@ import simd
         }
     }
 
+    @MainActor
+    func makeDanmakuMetalCaptureOverlay(
+        store: DanmakuRendererStore,
+        playbackTime: Double,
+        viewportSize: CGSize,
+        metrics: DanmakuLayoutMetrics,
+        outputSize: CGSize? = nil,
+        contentScale: CGFloat = 1
+    ) -> CGImage? {
+        DanmakuMetalCaptureService.shared.capture(
+            store: store,
+            playbackTime: playbackTime,
+            viewportSize: viewportSize,
+            metrics: metrics,
+            outputSize: outputSize,
+            contentScale: contentScale
+        )
+    }
+
     #if os(macOS)
         private final class PassthroughDanmakuMTKView: MTKView {
             var onLayoutChange: ((PassthroughDanmakuMTKView) -> Void)?
@@ -391,7 +410,9 @@ import simd
             }
 
             return
-                abs(CGFloat(drawable.texture.width) - expectedDrawableSize.width)
+                abs(
+                    CGFloat(drawable.texture.width) - expectedDrawableSize.width
+                )
                 <= 1
                 && abs(
                     CGFloat(drawable.texture.height)
@@ -411,6 +432,11 @@ import simd
             return colorAttachment.width == drawable.texture.width
                 && colorAttachment.height == drawable.texture.height
         }
+    }
+
+    private enum GlyphBuildMode {
+        case asynchronous
+        case synchronous
     }
 
     @MainActor
@@ -437,6 +463,7 @@ import simd
         private var preparedViewport: CGSize = .zero
         private var preparedMetrics: DanmakuLayoutMetrics = .playbackChrome
         private var preparedFontSignature: FontSignature?
+        private var preparedAtlasRevision: UInt64 = .max
         private var frameUniforms = GPUDanmakuUniforms()
 
         init?(device: MTLDevice) {
@@ -532,10 +559,34 @@ import simd
             playbackTime: Double,
             viewportSize: CGSize,
             metrics: DanmakuLayoutMetrics,
-            contentScale: Float
+            contentScale: Float,
+            glyphBuildMode: GlyphBuildMode = .asynchronous
         ) {
             let configuration = store.configuration
             let fontSignature = FontSignature(configuration: configuration)
+            atlas.prepare(configuration: configuration)
+            _ = atlas.applyCompletedGlyphs()
+            let atlasRevision = atlas.revision
+
+            if preparedVersion != store.contentVersion
+                || preparedViewport != viewportSize
+                || preparedMetrics != metrics
+                || preparedFontSignature != fontSignature
+                || preparedAtlasRevision != atlasRevision
+            {
+                rebuildBuffers(
+                    store: store,
+                    viewportSize: viewportSize,
+                    metrics: metrics,
+                    configuration: configuration,
+                    glyphBuildMode: glyphBuildMode
+                )
+                preparedVersion = store.contentVersion
+                preparedViewport = viewportSize
+                preparedMetrics = metrics
+                preparedFontSignature = fontSignature
+                preparedAtlasRevision = atlas.revision
+            }
 
             frameUniforms = GPUDanmakuUniforms(
                 viewportSize: SIMD2(
@@ -545,25 +596,13 @@ import simd
                 playbackTime: Float(playbackTime),
                 horizontalInset: Float(metrics.horizontalInset),
                 contentScale: contentScale,
+                msdfPixelRange: atlas.msdfPixelRange,
+                outlineWidth: Float(
+                    configuration.resolvedFontSize
+                        * (max(2, configuration.resolvedFontSize * 0.16) / 100)
+                ),
                 glyphCount: UInt32(glyphCount)
             )
-
-            if preparedVersion != store.contentVersion
-                || preparedViewport != viewportSize
-                || preparedMetrics != metrics
-                || preparedFontSignature != fontSignature
-            {
-                rebuildBuffers(
-                    store: store,
-                    viewportSize: viewportSize,
-                    metrics: metrics,
-                    configuration: configuration
-                )
-                preparedVersion = store.contentVersion
-                preparedViewport = viewportSize
-                preparedMetrics = metrics
-                preparedFontSignature = fontSignature
-            }
 
             uniformBuffer = Self.makeBuffer(
                 device: device,
@@ -580,7 +619,81 @@ import simd
             else {
                 return
             }
+            encodeFrame(
+                commandBuffer: commandBuffer,
+                descriptor: descriptor
+            )
 
+            commandBuffer.present(drawable)
+            commandBuffer.commit()
+        }
+
+        func renderOffscreen(
+            store: DanmakuRendererStore,
+            playbackTime: Double,
+            viewportSize: CGSize,
+            metrics: DanmakuLayoutMetrics,
+            outputSize: CGSize,
+            contentScale: Float
+        ) -> CGImage? {
+            prepareFrame(
+                store: store,
+                playbackTime: playbackTime,
+                viewportSize: viewportSize,
+                metrics: metrics,
+                contentScale: contentScale,
+                glyphBuildMode: .synchronous
+            )
+
+            let pixelWidth = max(
+                1,
+                Int(outputSize.width.rounded(.toNearestOrAwayFromZero))
+            )
+            let pixelHeight = max(
+                1,
+                Int(outputSize.height.rounded(.toNearestOrAwayFromZero))
+            )
+            guard
+                let texture = Self.makeCaptureTexture(
+                    device: device,
+                    width: pixelWidth,
+                    height: pixelHeight
+                ),
+                let commandBuffer = commandQueue.makeCommandBuffer()
+            else {
+                return nil
+            }
+
+            let descriptor = MTLRenderPassDescriptor()
+            descriptor.colorAttachments[0].texture = texture
+            descriptor.colorAttachments[0].loadAction = .clear
+            descriptor.colorAttachments[0].storeAction = .store
+            descriptor.colorAttachments[0].clearColor = MTLClearColorMake(
+                0,
+                0,
+                0,
+                0
+            )
+
+            encodeFrame(
+                commandBuffer: commandBuffer,
+                descriptor: descriptor
+            )
+
+            commandBuffer.commit()
+            commandBuffer.waitUntilCompleted()
+
+            guard commandBuffer.status == .completed else {
+                return nil
+            }
+
+            return Self.makeImage(from: texture)
+        }
+
+        private func encodeFrame(
+            commandBuffer: MTLCommandBuffer,
+            descriptor: MTLRenderPassDescriptor
+        ) {
             if glyphCount > 0,
                 let computeEncoder = commandBuffer.makeComputeCommandEncoder(),
                 let commentBuffer,
@@ -655,25 +768,22 @@ import simd
 
                 renderEncoder.endEncoding()
             }
-
-            commandBuffer.present(drawable)
-            commandBuffer.commit()
         }
 
         private func rebuildBuffers(
             store: DanmakuRendererStore,
             viewportSize: CGSize,
             metrics: DanmakuLayoutMetrics,
-            configuration: DanmakuRenderConfiguration
+            configuration: DanmakuRenderConfiguration,
+            glyphBuildMode: GlyphBuildMode
         ) {
-            atlas.prepare(configuration: configuration)
-
             do {
                 let snapshot = try buildSnapshot(
                     store: store,
                     viewportSize: viewportSize,
                     metrics: metrics,
-                    configuration: configuration
+                    configuration: configuration,
+                    glyphBuildMode: glyphBuildMode
                 )
 
                 glyphCount = snapshot.glyphs.count
@@ -690,11 +800,6 @@ import simd
                     repeating: GPURenderGlyphInstance(),
                     count: max(snapshot.glyphs.count, 1)
                 )
-                if !store.activeItems.isEmpty, snapshot.glyphs.isEmpty {
-                    Self.logger.error(
-                        "Prepared zero glyphs for \(store.activeItems.count) active danmaku items"
-                    )
-                }
             } catch {
                 Self.logger.error(
                     "Failed to rebuild danmaku buffers: \(error.localizedDescription, privacy: .public)"
@@ -710,7 +815,8 @@ import simd
             store: DanmakuRendererStore,
             viewportSize: CGSize,
             metrics: DanmakuLayoutMetrics,
-            configuration: DanmakuRenderConfiguration
+            configuration: DanmakuRenderConfiguration,
+            glyphBuildMode: GlyphBuildMode
         ) throws -> PreparedSnapshot {
             let font = configuration.fontStyle.ctFont(
                 ofSize: configuration.resolvedFontSize
@@ -722,16 +828,17 @@ import simd
                     viewportSize: viewportSize,
                     metrics: metrics,
                     font: font,
-                    configuration: configuration
+                    configuration: configuration,
+                    glyphBuildMode: glyphBuildMode
                 )
             } catch DynamicMSDFAtlas.AtlasError.restartBuild {
-                atlas.resetKeepingConfiguration()
                 return try buildSnapshotPass(
                     store: store,
                     viewportSize: viewportSize,
                     metrics: metrics,
                     font: font,
-                    configuration: configuration
+                    configuration: configuration,
+                    glyphBuildMode: glyphBuildMode
                 )
             }
         }
@@ -741,7 +848,8 @@ import simd
             viewportSize: CGSize,
             metrics: DanmakuLayoutMetrics,
             font: CTFont,
-            configuration: DanmakuRenderConfiguration
+            configuration: DanmakuRenderConfiguration,
+            glyphBuildMode: GlyphBuildMode
         ) throws -> PreparedSnapshot {
             var comments: [GPUCommentState] = []
             var glyphs: [GPUStaticGlyphInstance] = []
@@ -816,7 +924,8 @@ import simd
                         guard
                             let atlasEntry = try atlas.entry(
                                 for: glyph,
-                                font: runFont
+                                font: runFont,
+                                mode: glyphBuildMode
                             )
                         else {
                             continue
@@ -856,12 +965,32 @@ import simd
             value: T
         ) -> MTLBuffer? {
             var copy = value
-            return withUnsafeBytes(of: &copy) { rawBuffer in
-                device.makeBuffer(
-                    bytes: rawBuffer.baseAddress!,
-                    length: rawBuffer.count,
+            let size = MemoryLayout<T>.size
+            let stride = MemoryLayout<T>.stride
+            guard
+                let buffer = device.makeBuffer(
+                    length: stride,
                     options: .storageModeShared
                 )
+            else {
+                return nil
+            }
+
+            // Metal validates constant-buffer arguments against the struct's
+            // padded stride, not Swift's unpadded size.
+            buffer.contents().initializeMemory(
+                as: UInt8.self,
+                repeating: 0,
+                count: stride
+            )
+            return withUnsafeBytes(of: &copy) { rawBuffer in
+                if let baseAddress = rawBuffer.baseAddress, size > 0 {
+                    buffer.contents().copyMemory(
+                        from: baseAddress,
+                        byteCount: size
+                    )
+                }
+                return buffer
             }
         }
 
@@ -886,6 +1015,64 @@ import simd
         ) -> MTLBuffer? {
             let array = Array(repeating: value, count: count)
             return makeBuffer(device: device, array: array)
+        }
+
+        private static func makeCaptureTexture(
+            device: MTLDevice,
+            width: Int,
+            height: Int
+        ) -> MTLTexture? {
+            let descriptor = MTLTextureDescriptor.texture2DDescriptor(
+                pixelFormat: .bgra8Unorm,
+                width: width,
+                height: height,
+                mipmapped: false
+            )
+            descriptor.storageMode = .shared
+            descriptor.usage = [.renderTarget]
+            return device.makeTexture(descriptor: descriptor)
+        }
+
+        private static func makeImage(from texture: MTLTexture) -> CGImage? {
+            let bytesPerPixel = 4
+            let bytesPerRow = texture.width * bytesPerPixel
+            let byteCount = bytesPerRow * texture.height
+            var bytes = Array(repeating: UInt8(0), count: byteCount)
+            bytes.withUnsafeMutableBytes { rawBuffer in
+                guard let baseAddress = rawBuffer.baseAddress else { return }
+                texture.getBytes(
+                    baseAddress,
+                    bytesPerRow: bytesPerRow,
+                    from: MTLRegionMake2D(0, 0, texture.width, texture.height),
+                    mipmapLevel: 0
+                )
+            }
+
+            let colorSpace =
+                CGColorSpace(name: CGColorSpace.sRGB)
+                ?? CGColorSpaceCreateDeviceRGB()
+            let bitmapInfo = CGBitmapInfo.byteOrder32Little.union(
+                CGBitmapInfo(
+                    rawValue: CGImageAlphaInfo.premultipliedFirst.rawValue
+                )
+            )
+            let data = Data(bytes)
+            guard let provider = CGDataProvider(data: data as CFData) else {
+                return nil
+            }
+            return CGImage(
+                width: texture.width,
+                height: texture.height,
+                bitsPerComponent: 8,
+                bitsPerPixel: 32,
+                bytesPerRow: bytesPerRow,
+                space: colorSpace,
+                bitmapInfo: bitmapInfo,
+                provider: provider,
+                decode: nil,
+                shouldInterpolate: true,
+                intent: .defaultIntent
+            )
         }
 
         private static let shaderSource = #"""
@@ -922,7 +1109,10 @@ import simd
                 float playbackTime;
                 float horizontalInset;
                 float contentScale;
+                float msdfPixelRange;
+                float outlineWidth;
                 uint glyphCount;
+                uint _padding;
             };
 
             struct VertexOut {
@@ -1007,8 +1197,13 @@ import simd
                 return outVertex;
             }
 
+            float median(float a, float b, float c) {
+                return max(min(a, b), min(max(a, b), c));
+            }
+
             fragment float4 danmakuFragmentMain(
                 VertexOut in [[stage_in]],
+                constant GPUDanmakuUniforms &uniforms [[buffer(0)]],
                 texture2d<float> atlas [[texture(0)]],
                 sampler atlasSampler [[sampler(0)]]
             ) {
@@ -1016,33 +1211,36 @@ import simd
                     discard_fragment();
                 }
 
-                float glyphAlpha = atlas.sample(atlasSampler, in.uv).a;
-                float2 texel = 1.0 / float2(atlas.get_width(), atlas.get_height());
-                float2 outlineTexel = texel * 1.75;
-                float outlineSource = 0.0;
-                const float2 outlineOffsets[8] = {
-                    float2( 1.0,  0.0),
-                    float2(-1.0,  0.0),
-                    float2( 0.0,  1.0),
-                    float2( 0.0, -1.0),
-                    float2( 1.0,  1.0),
-                    float2(-1.0,  1.0),
-                    float2( 1.0, -1.0),
-                    float2(-1.0, -1.0),
-                };
-
-                for (uint index = 0; index < 8; index++) {
-                    outlineSource = max(
-                        outlineSource,
-                        atlas.sample(
-                            atlasSampler,
-                            in.uv + outlineOffsets[index] * outlineTexel
-                        ).a
-                    );
-                }
-
-                float fillAlpha = glyphAlpha * in.color.a;
-                float outlineAlpha = clamp(outlineSource - glyphAlpha, 0.0, 1.0)
+                float3 sample = atlas.sample(atlasSampler, in.uv).rgb;
+                float signedDistance =
+                    median(sample.r, sample.g, sample.b) - 0.5;
+                float2 unitRange = float2(uniforms.msdfPixelRange)
+                    / float2(atlas.get_width(), atlas.get_height());
+                float2 screenTexSize = 1.0 / max(
+                    fwidth(in.uv),
+                    float2(0.000001)
+                );
+                float screenPxRange = max(
+                    1.0,
+                    0.5 * dot(unitRange, screenTexSize)
+                );
+                float screenPxDistance = signedDistance * screenPxRange;
+                float desiredOutlineWidth = max(
+                    0.0,
+                    uniforms.outlineWidth * uniforms.contentScale
+                );
+                float outlineWidth = min(
+                    desiredOutlineWidth,
+                    max(screenPxRange * 0.5 - 0.5, 0.0)
+                );
+                float fillShape = clamp(screenPxDistance + 0.5, 0.0, 1.0);
+                float outlineShape = clamp(
+                    screenPxDistance + outlineWidth + 0.5,
+                    0.0,
+                    1.0
+                );
+                float fillAlpha = fillShape * in.color.a;
+                float outlineAlpha = max(outlineShape - fillShape, 0.0)
                     * in.color.a;
                 float totalAlpha = fillAlpha + outlineAlpha * (1.0 - fillAlpha);
                 if (totalAlpha <= 0.001) {
@@ -1055,10 +1253,50 @@ import simd
             """#
     }
 
+    @MainActor
+    private final class DanmakuMetalCaptureService {
+        static let shared = DanmakuMetalCaptureService()
+
+        private let device = MTLCreateSystemDefaultDevice()
+        private lazy var renderer: DanmakuMetalRenderer? = {
+            guard let device else { return nil }
+            return DanmakuMetalRenderer(device: device)
+        }()
+
+        func capture(
+            store: DanmakuRendererStore,
+            playbackTime: Double,
+            viewportSize: CGSize,
+            metrics: DanmakuLayoutMetrics,
+            outputSize: CGSize?,
+            contentScale: CGFloat
+        ) -> CGImage? {
+            let resolvedOutputSize =
+                outputSize
+                ?? CGSize(
+                    width: viewportSize.width * contentScale,
+                    height: viewportSize.height * contentScale
+                )
+            return renderer?.renderOffscreen(
+                store: store,
+                playbackTime: playbackTime,
+                viewportSize: viewportSize,
+                metrics: metrics,
+                outputSize: resolvedOutputSize,
+                contentScale: Float(contentScale)
+            )
+        }
+    }
+
     private final class DynamicMSDFAtlas {
         enum AtlasError: Error {
             case restartBuild
         }
+
+        private static let logger = Logger(
+            subsystem: "Starmine",
+            category: "DynamicMSDFAtlas"
+        )
 
         struct GlyphEntry {
             let planeBounds: CGRect
@@ -1066,16 +1304,47 @@ import simd
             let uvMax: SIMD2<Float>
         }
 
+        private struct GlyphCacheKey: Hashable {
+            let glyph: CGGlyph
+            let fontName: String
+            let fontSizeQuarterPoints: Int
+
+            init(glyph: CGGlyph, font: CTFont) {
+                self.glyph = glyph
+                fontName = CTFontCopyPostScriptName(font) as String
+                fontSizeQuarterPoints = Int((CTFontGetSize(font) * 4).rounded())
+            }
+        }
+
+        private struct CompletedGlyph {
+            let key: GlyphCacheKey
+            let planeBounds: CGRect
+            let bitmapWidth: Int
+            let bitmapHeight: Int
+            let bitmap: [UInt8]
+            let epoch: UInt64
+        }
+
         private let device: MTLDevice
         private let atlasSize: Int
         private let pixelRange: Int
         private let atlasScale: CGFloat
+        private let generationQueue = DispatchQueue(
+            label: "Starmine.DynamicMSDFAtlas",
+            qos: .userInitiated
+        )
+        private let stateLock = NSLock()
 
         private(set) var texture: MTLTexture
+        var msdfPixelRange: Float { Float(pixelRange) }
+        private(set) var revision: UInt64 = 0
         private var configurationSignature: FontSignature?
         private var nextOrigin = SIMD2<Int>(0, 0)
         private var currentRowHeight = 0
-        private var glyphCache: [CGGlyph: GlyphEntry] = [:]
+        private var glyphCache: [GlyphCacheKey: GlyphEntry] = [:]
+        private var generationEpoch: UInt64 = 0
+        private var pendingGlyphs: Set<GlyphCacheKey> = []
+        private var completedGlyphs: [CompletedGlyph] = []
 
         init(
             device: MTLDevice,
@@ -1097,27 +1366,204 @@ import simd
             resetKeepingConfiguration()
         }
 
+        func applyCompletedGlyphs() -> Bool {
+            let completedGlyphs = drainCompletedGlyphs()
+            guard !completedGlyphs.isEmpty else { return false }
+
+            do {
+                try apply(completedGlyphs: completedGlyphs)
+            } catch AtlasError.restartBuild {
+                resetKeepingConfiguration()
+            } catch {
+                Self.logger.error(
+                    "Failed to upload completed MSDF glyphs: \(error.localizedDescription, privacy: .public)"
+                )
+            }
+
+            return true
+        }
+
         func resetKeepingConfiguration() {
             nextOrigin = SIMD2<Int>(0, 0)
             currentRowHeight = 0
             glyphCache.removeAll(keepingCapacity: true)
             texture = Self.makeTexture(device: device, size: atlasSize)
+            revision &+= 1
+
+            stateLock.lock()
+            generationEpoch &+= 1
+            pendingGlyphs.removeAll(keepingCapacity: true)
+            completedGlyphs.removeAll(keepingCapacity: true)
+            stateLock.unlock()
         }
 
-        func entry(for glyph: CGGlyph, font: CTFont) throws -> GlyphEntry? {
-            if let cached = glyphCache[glyph] {
+        func entry(
+            for glyph: CGGlyph,
+            font: CTFont,
+            mode: GlyphBuildMode = .asynchronous
+        ) throws -> GlyphEntry? {
+            let cacheKey = GlyphCacheKey(glyph: glyph, font: font)
+            if let cached = glyphCache[cacheKey] {
                 return cached
             }
 
-            var mutableGlyph = glyph
-            let glyphBounds = CTFontGetBoundingRectsForGlyphs(
-                font,
-                .default,
-                &mutableGlyph,
-                nil,
-                1
-            )
-            guard glyphBounds.width > 0, glyphBounds.height > 0 else {
+            switch mode {
+            case .asynchronous:
+                enqueueBuildIfNeeded(for: cacheKey, glyph: glyph, font: font)
+                return nil
+            case .synchronous:
+                return try buildGlyphSynchronouslyIfNeeded(
+                    for: cacheKey,
+                    glyph: glyph,
+                    font: font
+                )
+            }
+        }
+
+        private func buildGlyphSynchronouslyIfNeeded(
+            for key: GlyphCacheKey,
+            glyph: CGGlyph,
+            font: CTFont
+        ) throws -> GlyphEntry? {
+            if let cached = glyphCache[key] {
+                return cached
+            }
+
+            stateLock.lock()
+            let epoch = generationEpoch
+            stateLock.unlock()
+
+            guard
+                let completedGlyph = Self.buildCompletedGlyph(
+                    key: key,
+                    glyph: glyph,
+                    font: font,
+                    pixelRange: pixelRange,
+                    atlasScale: atlasScale,
+                    epoch: epoch
+                )
+            else {
+                return nil
+            }
+
+            do {
+                try apply(completedGlyphs: [completedGlyph])
+            } catch AtlasError.restartBuild {
+                resetKeepingConfiguration()
+                throw AtlasError.restartBuild
+            }
+
+            return glyphCache[key]
+        }
+
+        private func enqueueBuildIfNeeded(
+            for key: GlyphCacheKey,
+            glyph: CGGlyph,
+            font: CTFont
+        ) {
+            let epoch: UInt64
+            let shouldSchedule: Bool
+
+            stateLock.lock()
+            epoch = generationEpoch
+            shouldSchedule = pendingGlyphs.insert(key).inserted
+            stateLock.unlock()
+
+            guard shouldSchedule else { return }
+
+            let pixelRange = self.pixelRange
+            let atlasScale = self.atlasScale
+            generationQueue.async { [weak self] in
+                guard let self else { return }
+                let completedGlyph = Self.buildCompletedGlyph(
+                    key: key,
+                    glyph: glyph,
+                    font: font,
+                    pixelRange: pixelRange,
+                    atlasScale: atlasScale,
+                    epoch: epoch
+                )
+
+                self.stateLock.lock()
+                self.pendingGlyphs.remove(key)
+                if let completedGlyph,
+                    completedGlyph.epoch == self.generationEpoch
+                {
+                    self.completedGlyphs.append(completedGlyph)
+                }
+                self.stateLock.unlock()
+            }
+        }
+
+        private func drainCompletedGlyphs() -> [CompletedGlyph] {
+            stateLock.lock()
+            let drainedGlyphs = self.completedGlyphs
+            self.completedGlyphs.removeAll(keepingCapacity: true)
+            stateLock.unlock()
+            return drainedGlyphs
+        }
+
+        private func apply(completedGlyphs: [CompletedGlyph]) throws {
+            var didUploadGlyph = false
+
+            for completedGlyph in completedGlyphs {
+                if glyphCache[completedGlyph.key] != nil {
+                    continue
+                }
+
+                let textureRect = try allocateRect(
+                    width: completedGlyph.bitmapWidth,
+                    height: completedGlyph.bitmapHeight
+                )
+                completedGlyph.bitmap.withUnsafeBytes { rawBuffer in
+                    texture.replace(
+                        region: MTLRegionMake2D(
+                            Int(textureRect.origin.x),
+                            Int(textureRect.origin.y),
+                            completedGlyph.bitmapWidth,
+                            completedGlyph.bitmapHeight
+                        ),
+                        mipmapLevel: 0,
+                        withBytes: rawBuffer.baseAddress!,
+                        bytesPerRow: completedGlyph.bitmapWidth * 4
+                    )
+                }
+
+                glyphCache[completedGlyph.key] = GlyphEntry(
+                    planeBounds: completedGlyph.planeBounds,
+                    uvMin: SIMD2(
+                        Float(textureRect.minX) / Float(atlasSize),
+                        Float(textureRect.minY) / Float(atlasSize)
+                    ),
+                    uvMax: SIMD2(
+                        Float(textureRect.maxX) / Float(atlasSize),
+                        Float(textureRect.maxY) / Float(atlasSize)
+                    )
+                )
+                didUploadGlyph = true
+            }
+
+            if didUploadGlyph {
+                revision &+= 1
+            }
+        }
+
+        private static func buildCompletedGlyph(
+            key: GlyphCacheKey,
+            glyph: CGGlyph,
+            font: CTFont,
+            pixelRange: Int,
+            atlasScale: CGFloat,
+            epoch: UInt64
+        ) -> CompletedGlyph? {
+            guard let path = CTFontCreatePathForGlyph(font, glyph, nil) else {
+                return nil
+            }
+
+            let glyphBounds = path.boundingBoxOfPath
+            guard !glyphBounds.isNull, glyphBounds.width > 0,
+                glyphBounds.height > 0
+            else {
                 return nil
             }
 
@@ -1128,96 +1574,20 @@ import simd
                 2,
                 Int(ceil(planeBounds.height * atlasScale))
             )
-            let textureRect = try allocateRect(
-                width: bitmapWidth,
-                height: bitmapHeight
-            )
-            let bitmap = rasterizeGlyph(
-                glyph,
-                font: font,
-                bounds: planeBounds,
-                pixelWidth: bitmapWidth,
-                pixelHeight: bitmapHeight
-            )
 
-            bitmap.withUnsafeBytes { rawBuffer in
-                texture.replace(
-                    region: MTLRegionMake2D(
-                        Int(textureRect.origin.x),
-                        Int(textureRect.origin.y),
-                        bitmapWidth,
-                        bitmapHeight
-                    ),
-                    mipmapLevel: 0,
-                    withBytes: rawBuffer.baseAddress!,
-                    bytesPerRow: bitmapWidth * 4
-                )
-            }
-
-            let entry = GlyphEntry(
+            return CompletedGlyph(
+                key: key,
                 planeBounds: planeBounds,
-                uvMin: SIMD2(
-                    Float(textureRect.minX) / Float(atlasSize),
-                    Float(textureRect.minY) / Float(atlasSize)
+                bitmapWidth: bitmapWidth,
+                bitmapHeight: bitmapHeight,
+                bitmap: GlyphContours(path: path).makeMSDFBitmap(
+                    bounds: planeBounds,
+                    pixelWidth: bitmapWidth,
+                    pixelHeight: bitmapHeight,
+                    range: padding
                 ),
-                uvMax: SIMD2(
-                    Float(textureRect.maxX) / Float(atlasSize),
-                    Float(textureRect.maxY) / Float(atlasSize)
-                )
+                epoch: epoch
             )
-            glyphCache[glyph] = entry
-            return entry
-        }
-
-        private func rasterizeGlyph(
-            _ glyph: CGGlyph,
-            font: CTFont,
-            bounds: CGRect,
-            pixelWidth: Int,
-            pixelHeight: Int
-        ) -> [UInt8] {
-            var pixels = Array(
-                repeating: UInt8(0),
-                count: pixelWidth * pixelHeight * 4
-            )
-            let colorSpace = CGColorSpaceCreateDeviceRGB()
-
-            pixels.withUnsafeMutableBytes { rawBuffer in
-                guard
-                    let context = CGContext(
-                        data: rawBuffer.baseAddress,
-                        width: pixelWidth,
-                        height: pixelHeight,
-                        bitsPerComponent: 8,
-                        bytesPerRow: pixelWidth * 4,
-                        space: colorSpace,
-                        bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
-                    )
-                else {
-                    return
-                }
-
-                context.clear(
-                    CGRect(x: 0, y: 0, width: pixelWidth, height: pixelHeight)
-                )
-                context.setAllowsAntialiasing(true)
-                context.setShouldAntialias(true)
-                context.interpolationQuality = .high
-                context.setFillColor(
-                    CGColor(red: 1, green: 1, blue: 1, alpha: 1)
-                )
-                context.translateBy(
-                    x: -bounds.minX * atlasScale,
-                    y: bounds.maxY * atlasScale
-                )
-                context.scaleBy(x: atlasScale, y: -atlasScale)
-
-                var glyphCopy = glyph
-                var position = CGPoint.zero
-                CTFontDrawGlyphs(font, &glyphCopy, &position, 1, context)
-            }
-
-            return pixels
         }
 
         private func allocateRect(width: Int, height: Int) throws -> CGRect {
@@ -1308,7 +1678,10 @@ import simd
         var playbackTime: Float = 0
         var horizontalInset: Float = 0
         var contentScale: Float = 1
+        var msdfPixelRange: Float = 0
+        var outlineWidth: Float = 0
         var glyphCount: UInt32 = 0
+        var padding: UInt32 = 0
     }
 
     extension DanmakuRegion {
@@ -1325,60 +1698,10 @@ import simd
     }
 
     private struct GlyphContours {
-        private struct Contour {
-            var points: [CGPoint]
-        }
-
-        private struct Segment {
-            let start: CGPoint
-            let end: CGPoint
-            let channel: Int
-
-            func distanceSquared(to point: CGPoint) -> CGFloat {
-                let dx = end.x - start.x
-                let dy = end.y - start.y
-                let lengthSquared = dx * dx + dy * dy
-                guard lengthSquared > 0.000_001 else {
-                    let px = point.x - start.x
-                    let py = point.y - start.y
-                    return px * px + py * py
-                }
-
-                let t = max(
-                    0,
-                    min(
-                        1,
-                        ((point.x - start.x) * dx + (point.y - start.y) * dy)
-                            / lengthSquared
-                    )
-                )
-                let projected = CGPoint(
-                    x: start.x + dx * t,
-                    y: start.y + dy * t
-                )
-                let px = point.x - projected.x
-                let py = point.y - projected.y
-                return px * px + py * py
-            }
-        }
-
-        private let contours: [Contour]
-        private let allSegments: [Segment]
+        private let path: CGPath
 
         init(path: CGPath) {
-            contours = Self.flattenContours(from: path)
-            allSegments = contours.flatMap { contour in
-                guard contour.points.count > 1 else { return [Segment]() }
-                return contour.points.enumerated().compactMap { index, point in
-                    let nextIndex = (index + 1) % contour.points.count
-                    guard nextIndex != index else { return nil }
-                    return Segment(
-                        start: point,
-                        end: contour.points[nextIndex],
-                        channel: index % 3
-                    )
-                }
-            }
+            self.path = path
         }
 
         func makeMSDFBitmap(
@@ -1387,237 +1710,220 @@ import simd
             pixelHeight: Int,
             range: CGFloat
         ) -> [UInt8] {
-            guard !allSegments.isEmpty else {
+            guard pixelWidth > 0, pixelHeight > 0 else {
                 return Array(repeating: 0, count: pixelWidth * pixelHeight * 4)
             }
 
+            let mask = rasterizeMask(
+                bounds: bounds,
+                pixelWidth: pixelWidth,
+                pixelHeight: pixelHeight
+            )
+            let signedDistances = Self.makeSignedDistanceField(
+                from: mask,
+                width: pixelWidth,
+                height: pixelHeight
+            )
+            let scaleX = CGFloat(pixelWidth) / max(bounds.width, 0.000_001)
+            let scaleY = CGFloat(pixelHeight) / max(bounds.height, 0.000_001)
+            let pixelRange = max(1, Float(range * min(scaleX, scaleY)))
             var pixels = Array(
                 repeating: UInt8(0),
                 count: pixelWidth * pixelHeight * 4
             )
-            let scaleX = bounds.width / CGFloat(pixelWidth)
-            let scaleY = bounds.height / CGFloat(pixelHeight)
 
-            for row in 0..<pixelHeight {
-                for column in 0..<pixelWidth {
-                    let sample = CGPoint(
-                        x: bounds.minX + (CGFloat(column) + 0.5) * scaleX,
-                        y: bounds.maxY - (CGFloat(row) + 0.5) * scaleY
-                    )
-                    let inside = contains(sample)
-                    let signedDistances = (0..<3).map { channel in
-                        signedDistance(
-                            to: sample,
-                            channel: channel,
-                            inside: inside
-                        )
-                    }
-
-                    let base = (row * pixelWidth + column) * 4
-                    pixels[base] = encode(
-                        distance: signedDistances[0],
-                        range: range
-                    )
-                    pixels[base + 1] = encode(
-                        distance: signedDistances[1],
-                        range: range
-                    )
-                    pixels[base + 2] = encode(
-                        distance: signedDistances[2],
-                        range: range
-                    )
-                    pixels[base + 3] = 255
-                }
+            for index in 0..<(pixelWidth * pixelHeight) {
+                let encoded = encode(
+                    distance: signedDistances[index],
+                    range: pixelRange
+                )
+                let base = index * 4
+                pixels[base] = encoded
+                pixels[base + 1] = encoded
+                pixels[base + 2] = encoded
+                pixels[base + 3] = 255
             }
 
             return pixels
         }
 
-        private func signedDistance(
-            to point: CGPoint,
-            channel: Int,
-            inside: Bool
-        ) -> CGFloat {
-            let channelSegments = allSegments.filter { $0.channel == channel }
-            let segments =
-                channelSegments.isEmpty ? allSegments : channelSegments
-            let minimumDistanceSquared =
-                segments.map { $0.distanceSquared(to: point) }.min() ?? 0
-            let distance = sqrt(minimumDistanceSquared)
-            return inside ? distance : -distance
+        private func rasterizeMask(
+            bounds: CGRect,
+            pixelWidth: Int,
+            pixelHeight: Int
+        ) -> [UInt8] {
+            var mask = Array(
+                repeating: UInt8(0),
+                count: pixelWidth * pixelHeight
+            )
+            let colorSpace = CGColorSpaceCreateDeviceGray()
+            let scaleX = CGFloat(pixelWidth) / max(bounds.width, 0.000_001)
+            let scaleY = CGFloat(pixelHeight) / max(bounds.height, 0.000_001)
+
+            mask.withUnsafeMutableBytes { rawBuffer in
+                guard
+                    let context = CGContext(
+                        data: rawBuffer.baseAddress,
+                        width: pixelWidth,
+                        height: pixelHeight,
+                        bitsPerComponent: 8,
+                        bytesPerRow: pixelWidth,
+                        space: colorSpace,
+                        bitmapInfo: CGImageAlphaInfo.none.rawValue
+                    )
+                else {
+                    return
+                }
+
+                context.setAllowsAntialiasing(false)
+                context.setShouldAntialias(false)
+                context.setFillColor(gray: 1, alpha: 1)
+                context.translateBy(
+                    x: -bounds.minX * scaleX,
+                    y: bounds.maxY * scaleY
+                )
+                context.scaleBy(x: scaleX, y: -scaleY)
+                context.addPath(path)
+                context.fillPath()
+            }
+
+            return mask
         }
 
-        private func contains(_ point: CGPoint) -> Bool {
-            var windingCount = 0
+        private static func makeSignedDistanceField(
+            from mask: [UInt8],
+            width: Int,
+            height: Int
+        ) -> [Float] {
+            let infinity: Float = 1e10
+            var insideGrid = Array(repeating: infinity, count: mask.count)
+            var outsideGrid = Array(repeating: infinity, count: mask.count)
 
-            for segment in allSegments {
-                let y1 = segment.start.y
-                let y2 = segment.end.y
-                let intersects = (y1 > point.y) != (y2 > point.y)
-                guard intersects else { continue }
-
-                let intersectionX =
-                    (segment.end.x - segment.start.x) * (point.y - y1)
-                    / (y2 - y1) + segment.start.x
-                if point.x < intersectionX {
-                    windingCount += 1
+            for index in mask.indices {
+                if mask[index] >= 128 {
+                    insideGrid[index] = 0
+                } else {
+                    outsideGrid[index] = 0
                 }
             }
 
-            return windingCount % 2 == 1
+            let distanceToInside = distanceTransform(
+                grid: insideGrid,
+                width: width,
+                height: height
+            )
+            let distanceToOutside = distanceTransform(
+                grid: outsideGrid,
+                width: width,
+                height: height
+            )
+
+            var signedDistances = Array(repeating: Float(0), count: mask.count)
+            for index in mask.indices {
+                signedDistances[index] =
+                    sqrt(distanceToOutside[index])
+                    - sqrt(distanceToInside[index])
+            }
+            return signedDistances
         }
 
-        private func encode(distance: CGFloat, range: CGFloat) -> UInt8 {
+        private static func distanceTransform(
+            grid: [Float],
+            width: Int,
+            height: Int
+        ) -> [Float] {
+            var intermediate = Array(repeating: Float(0), count: grid.count)
+            var output = Array(repeating: Float(0), count: grid.count)
+            var columnInput = Array(repeating: Float(0), count: height)
+            var columnOutput = Array(repeating: Float(0), count: height)
+            var rowInput = Array(repeating: Float(0), count: width)
+            var rowOutput = Array(repeating: Float(0), count: width)
+            var v = Array(repeating: 0, count: max(width, height))
+            var z = Array(repeating: Float(0), count: max(width, height) + 1)
+
+            for x in 0..<width {
+                for y in 0..<height {
+                    columnInput[y] = grid[y * width + x]
+                }
+                distanceTransform1D(
+                    input: columnInput,
+                    length: height,
+                    output: &columnOutput,
+                    v: &v,
+                    z: &z
+                )
+                for y in 0..<height {
+                    intermediate[y * width + x] = columnOutput[y]
+                }
+            }
+
+            for y in 0..<height {
+                for x in 0..<width {
+                    rowInput[x] = intermediate[y * width + x]
+                }
+                distanceTransform1D(
+                    input: rowInput,
+                    length: width,
+                    output: &rowOutput,
+                    v: &v,
+                    z: &z
+                )
+                for x in 0..<width {
+                    output[y * width + x] = rowOutput[x]
+                }
+            }
+
+            return output
+        }
+
+        private static func distanceTransform1D(
+            input: [Float],
+            length: Int,
+            output: inout [Float],
+            v: inout [Int],
+            z: inout [Float]
+        ) {
+            guard length > 0 else { return }
+
+            var k = 0
+            v[0] = 0
+            z[0] = -.greatestFiniteMagnitude
+            z[1] = .greatestFiniteMagnitude
+
+            for q in 1..<length {
+                var intersection = Float(0)
+                repeat {
+                    let previous = v[k]
+                    intersection =
+                        ((input[q] + Float(q * q))
+                            - (input[previous] + Float(previous * previous)))
+                        / Float(2 * (q - previous))
+                    if intersection <= z[k] {
+                        k -= 1
+                    } else {
+                        break
+                    }
+                } while k > 0
+
+                k += 1
+                v[k] = q
+                z[k] = intersection
+                z[k + 1] = .greatestFiniteMagnitude
+            }
+
+            k = 0
+            for q in 0..<length {
+                while z[k + 1] < Float(q) {
+                    k += 1
+                }
+                let delta = Float(q - v[k])
+                output[q] = delta * delta + input[v[k]]
+            }
+        }
+
+        private func encode(distance: Float, range: Float) -> UInt8 {
             let normalized = min(max(0.5 + distance / (range * 2), 0), 1)
             return UInt8((normalized * 255).rounded())
-        }
-
-        private static func flattenContours(from path: CGPath) -> [Contour] {
-            var contours: [Contour] = []
-            var currentPoints: [CGPoint] = []
-            var currentPoint = CGPoint.zero
-            var subpathStart = CGPoint.zero
-
-            path.applyWithBlock { pointer in
-                let element = pointer.pointee
-                switch element.type {
-                case .moveToPoint:
-                    if currentPoints.count > 1 {
-                        contours.append(Contour(points: currentPoints))
-                    }
-                    let point = element.points[0]
-                    currentPoints = [point]
-                    currentPoint = point
-                    subpathStart = point
-                case .addLineToPoint:
-                    let point = element.points[0]
-                    currentPoints.append(point)
-                    currentPoint = point
-                case .addQuadCurveToPoint:
-                    let control = element.points[0]
-                    let end = element.points[1]
-                    let samples = curveSampleCount(
-                        from: currentPoint,
-                        control: control,
-                        end: end
-                    )
-                    for sampleIndex in 1...samples {
-                        let t = CGFloat(sampleIndex) / CGFloat(samples)
-                        currentPoints.append(
-                            quadraticPoint(
-                                start: currentPoint,
-                                control: control,
-                                end: end,
-                                t: t
-                            )
-                        )
-                    }
-                    currentPoint = end
-                case .addCurveToPoint:
-                    let control1 = element.points[0]
-                    let control2 = element.points[1]
-                    let end = element.points[2]
-                    let samples = cubicSampleCount(
-                        from: currentPoint,
-                        control1: control1,
-                        control2: control2,
-                        end: end
-                    )
-                    for sampleIndex in 1...samples {
-                        let t = CGFloat(sampleIndex) / CGFloat(samples)
-                        currentPoints.append(
-                            cubicPoint(
-                                start: currentPoint,
-                                control1: control1,
-                                control2: control2,
-                                end: end,
-                                t: t
-                            )
-                        )
-                    }
-                    currentPoint = end
-                case .closeSubpath:
-                    if currentPoints.count > 1 {
-                        if currentPoints.last != subpathStart {
-                            currentPoints.append(subpathStart)
-                        }
-                        contours.append(Contour(points: currentPoints))
-                    }
-                    currentPoints = []
-                    currentPoint = subpathStart
-                @unknown default:
-                    break
-                }
-            }
-
-            if currentPoints.count > 1 {
-                contours.append(Contour(points: currentPoints))
-            }
-
-            return contours
-        }
-
-        private static func curveSampleCount(
-            from start: CGPoint,
-            control: CGPoint,
-            end: CGPoint
-        ) -> Int {
-            let length =
-                hypot(control.x - start.x, control.y - start.y)
-                + hypot(end.x - control.x, end.y - control.y)
-            return max(8, Int(length / 2))
-        }
-
-        private static func cubicSampleCount(
-            from start: CGPoint,
-            control1: CGPoint,
-            control2: CGPoint,
-            end: CGPoint
-        ) -> Int {
-            let length =
-                hypot(control1.x - start.x, control1.y - start.y)
-                + hypot(control2.x - control1.x, control2.y - control1.y)
-                + hypot(end.x - control2.x, end.y - control2.y)
-            return max(10, Int(length / 2))
-        }
-
-        private static func quadraticPoint(
-            start: CGPoint,
-            control: CGPoint,
-            end: CGPoint,
-            t: CGFloat
-        ) -> CGPoint {
-            let oneMinusT = 1 - t
-            let x =
-                oneMinusT * oneMinusT * start.x
-                + 2 * oneMinusT * t * control.x
-                + t * t * end.x
-            let y =
-                oneMinusT * oneMinusT * start.y
-                + 2 * oneMinusT * t * control.y
-                + t * t * end.y
-            return CGPoint(x: x, y: y)
-        }
-
-        private static func cubicPoint(
-            start: CGPoint,
-            control1: CGPoint,
-            control2: CGPoint,
-            end: CGPoint,
-            t: CGFloat
-        ) -> CGPoint {
-            let oneMinusT = 1 - t
-            let x =
-                oneMinusT * oneMinusT * oneMinusT * start.x
-                + 3 * oneMinusT * oneMinusT * t * control1.x
-                + 3 * oneMinusT * t * t * control2.x
-                + t * t * t * end.x
-            let y =
-                oneMinusT * oneMinusT * oneMinusT * start.y
-                + 3 * oneMinusT * oneMinusT * t * control1.y
-                + 3 * oneMinusT * t * t * control2.y
-                + t * t * t * end.y
-            return CGPoint(x: x, y: y)
         }
     }
 #else

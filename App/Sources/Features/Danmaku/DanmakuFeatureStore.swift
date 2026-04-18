@@ -1,4 +1,5 @@
 import Combine
+import CoreGraphics
 import Foundation
 
 struct DanmakuAnimeMapping: Codable, Hashable {
@@ -222,7 +223,7 @@ final class DanmakuFeatureStore: ObservableObject {
     ) {
         let query =
             fallbackQuery?.trimmingCharacters(in: .whitespacesAndNewlines)
-                .nilIfEmpty
+            .nilIfEmpty
             ?? payload.anime.title
         searchQuery = query
         searchResults = [payload.anime]
@@ -616,10 +617,165 @@ final class DanmakuFeatureStore: ObservableObject {
             )
         )
     }
+
+    func makeCaptureOverlay(
+        playbackTime: Double,
+        viewportSize: CGSize
+    ) -> CGImage? {
+        guard
+            viewportSize.width > 1,
+            viewportSize.height > 1,
+            !renderer.loadedComments.isEmpty
+        else {
+            return nil
+        }
+
+        let projection = resolvedCaptureProjection(for: viewportSize)
+        renderer.sync(
+            playbackTime: playbackTime,
+            viewportSize: projection.renderViewportSize,
+            metrics: projection.metrics
+        )
+
+        guard !renderer.activeItems.isEmpty else { return nil }
+
+        guard
+            let surfaceOverlay = makeDanmakuMetalCaptureOverlay(
+                store: renderer,
+                playbackTime: playbackTime,
+                viewportSize: projection.renderViewportSize,
+                metrics: projection.metrics,
+                outputSize: projection.outputSize,
+                contentScale: projection.outputScale
+            )
+        else {
+            return nil
+        }
+
+        let fullRect = CGRect(
+            x: 0,
+            y: 0,
+            width: surfaceOverlay.width,
+            height: surfaceOverlay.height
+        )
+        if fullRect.equalTo(projection.cropRect) {
+            return surfaceOverlay
+        }
+        return surfaceOverlay.cropping(to: projection.cropRect)
+    }
+
+    private func resolvedCaptureProjection(
+        for captureViewportSize: CGSize
+    ) -> DanmakuCaptureProjection {
+        let targetSize = CGSize(
+            width: max(
+                1,
+                captureViewportSize.width.rounded(.toNearestOrAwayFromZero)
+            ),
+            height: max(
+                1,
+                captureViewportSize.height.rounded(.toNearestOrAwayFromZero)
+            )
+        )
+
+        guard
+            renderer.lastViewportSize.width > 1,
+            renderer.lastViewportSize.height > 1
+        else {
+            return DanmakuCaptureProjection(
+                renderViewportSize: targetSize,
+                metrics: .capture,
+                outputSize: targetSize,
+                outputScale: 1,
+                cropRect: CGRect(origin: .zero, size: targetSize)
+            )
+        }
+
+        let renderViewportSize = renderer.lastViewportSize
+        let videoRect = fittedVideoRect(
+            aspectRatio: targetSize.width / max(targetSize.height, 1),
+            in: renderViewportSize
+        )
+        guard videoRect.width > 1, videoRect.height > 1 else {
+            return DanmakuCaptureProjection(
+                renderViewportSize: targetSize,
+                metrics: renderer.lastMetrics,
+                outputSize: targetSize,
+                outputScale: 1,
+                cropRect: CGRect(origin: .zero, size: targetSize)
+            )
+        }
+
+        let outputScale = targetSize.width / videoRect.width
+        let outputSize = CGSize(
+            width: ceil(renderViewportSize.width * outputScale),
+            height: ceil(renderViewportSize.height * outputScale)
+        )
+        let outputBounds = CGRect(origin: .zero, size: outputSize)
+        var cropRect = CGRect(
+            x: floor(videoRect.minX * outputScale),
+            y: floor(videoRect.minY * outputScale),
+            width: targetSize.width,
+            height: targetSize.height
+        )
+        if cropRect.maxX > outputBounds.maxX {
+            cropRect.origin.x = max(0, outputBounds.maxX - cropRect.width)
+        }
+        if cropRect.maxY > outputBounds.maxY {
+            cropRect.origin.y = max(0, outputBounds.maxY - cropRect.height)
+        }
+
+        return DanmakuCaptureProjection(
+            renderViewportSize: renderViewportSize,
+            metrics: renderer.lastMetrics,
+            outputSize: outputSize,
+            outputScale: outputScale,
+            cropRect: cropRect
+        )
+    }
+
+    private func fittedVideoRect(
+        aspectRatio: CGFloat,
+        in containerSize: CGSize
+    ) -> CGRect {
+        guard containerSize.width > 0, containerSize.height > 0 else {
+            return .zero
+        }
+        guard aspectRatio > 0 else {
+            return CGRect(origin: .zero, size: containerSize)
+        }
+
+        let containerAspect = containerSize.width / containerSize.height
+        if aspectRatio > containerAspect {
+            let fittedHeight = containerSize.width / aspectRatio
+            return CGRect(
+                x: 0,
+                y: (containerSize.height - fittedHeight) / 2,
+                width: containerSize.width,
+                height: fittedHeight
+            )
+        } else {
+            let fittedWidth = containerSize.height * aspectRatio
+            return CGRect(
+                x: (containerSize.width - fittedWidth) / 2,
+                y: 0,
+                width: fittedWidth,
+                height: containerSize.height
+            )
+        }
+    }
 }
 
 extension AnimeEpisode {
     fileprivate var hasNumericOrdinal: Bool {
         number != nil
     }
+}
+
+private struct DanmakuCaptureProjection {
+    let renderViewportSize: CGSize
+    let metrics: DanmakuLayoutMetrics
+    let outputSize: CGSize
+    let outputScale: CGFloat
+    let cropRect: CGRect
 }

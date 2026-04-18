@@ -1,3 +1,5 @@
+import CoreGraphics
+import CoreImage
 import Foundation
 import Libmpv
 
@@ -6,7 +8,31 @@ private struct PendingExternalSubtitle {
     var shouldSelect: Bool
 }
 
-final class MPVPlayerController {
+enum PlayerScreenshotError: LocalizedError {
+    case noActiveVideo
+    case commandFailed(String)
+    case invalidPayload(String)
+    case imageCreationFailed
+
+    var errorDescription: String? {
+        switch self {
+        case .noActiveVideo:
+            return "当前没有可截图的视频。"
+        case let .commandFailed(reason):
+            return reason
+        case let .invalidPayload(reason):
+            return reason
+        case .imageCreationFailed:
+            return "截图图像生成失败。"
+        }
+    }
+}
+
+struct PlayerScreenshotCapture {
+    let image: CGImage
+}
+
+final class MPVPlayerController: @unchecked Sendable {
     var onSnapshot: ((PlaybackSnapshot) -> Void)?
     var onLogMessage: ((String) -> Void)?
     var onTrackState: ((PlayerTrackState) -> Void)?
@@ -147,6 +173,19 @@ final class MPVPlayerController {
         }
     }
 
+    func captureScreenshot() async throws -> PlayerScreenshotCapture {
+        try await withCheckedThrowingContinuation { continuation in
+            queue.async {
+                do {
+                    let capture = try self.captureScreenshotLocked()
+                    continuation.resume(returning: capture)
+                } catch {
+                    continuation.resume(throwing: error)
+                }
+            }
+        }
+    }
+
     private func bootstrapLocked(hostID: Int64) {
         guard let context = mpv_create() else {
             log("mpv_create failed")
@@ -176,6 +215,8 @@ final class MPVPlayerController {
         mpv_set_option_string(context, "video-sync", "display-resample")
         mpv_set_option_string(context, "interpolation", "yes")
         mpv_set_option_string(context, "tscale", "oversample")
+        mpv_set_option_string(context, "screenshot-high-bit-depth", "yes")
+        mpv_set_option_string(context, "screenshot-tag-colorspace", "yes")
         mpv_set_option_string(context, "vo", "gpu-next")
         mpv_set_option_string(context, "scale", "ewa_lanczossharp")
         mpv_set_option_string(context, "cscale", "ewa_lanczossharp")
@@ -291,8 +332,43 @@ final class MPVPlayerController {
         )
     }
 
+    private func captureScreenshotLocked() throws -> PlayerScreenshotCapture {
+        guard stringPropertyLocked(name: "path") != nil else {
+            throw PlayerScreenshotError.noActiveVideo
+        }
+
+        let colorSpace = resolvedScreenshotColorSpaceLocked()
+        var lastError: Error?
+
+        for requestedFormat in ScreenshotPixelFormat.captureOrder {
+            do {
+                var result = try commandResultLocked(
+                    "screenshot-raw",
+                    arguments: ["subtitles", requestedFormat.mpvArgument]
+                )
+                defer { mpv_free_node_contents(&result) }
+                return try makeScreenshotCaptureLocked(
+                    from: result,
+                    colorSpace: colorSpace
+                )
+            } catch {
+                lastError = error
+            }
+        }
+
+        throw lastError
+            ?? PlayerScreenshotError.invalidPayload("mpv 未返回可用的原始截图数据。")
+    }
+
     private func commandLocked(_ command: String, arguments: [String]) {
-        guard let mpv else { return }
+        _ = commandStatusLocked(command, arguments: arguments)
+    }
+
+    @discardableResult
+    private func commandStatusLocked(_ command: String, arguments: [String])
+        -> Int32
+    {
+        guard let mpv else { return Int32(MPV_ERROR_UNINITIALIZED.rawValue) }
         let ownedStrings = ([command] + arguments).map { strdup($0) }
         defer {
             for string in ownedStrings where string != nil {
@@ -303,9 +379,40 @@ final class MPVPlayerController {
             pointer.map { UnsafePointer<CChar>($0) }
         }
         cStrings.append(nil)
-        cStrings.withUnsafeMutableBufferPointer { buffer in
-            _ = mpv_command(mpv, buffer.baseAddress)
+        return cStrings.withUnsafeMutableBufferPointer { buffer in
+            mpv_command(mpv, buffer.baseAddress)
         }
+    }
+
+    private func commandResultLocked(_ command: String, arguments: [String])
+        throws
+        -> mpv_node
+    {
+        guard let mpv else {
+            throw PlayerScreenshotError.commandFailed("播放器尚未初始化。")
+        }
+
+        let ownedStrings = ([command] + arguments).map { strdup($0) }
+        defer {
+            for string in ownedStrings where string != nil {
+                free(string)
+            }
+        }
+
+        var cStrings = ownedStrings.map { pointer in
+            pointer.map { UnsafePointer<CChar>($0) }
+        }
+        cStrings.append(nil)
+
+        var result = mpv_node()
+        let status = cStrings.withUnsafeMutableBufferPointer { buffer in
+            mpv_command_ret(mpv, buffer.baseAddress, &result)
+        }
+        guard status >= 0 else {
+            let message = String(cString: mpv_error_string(status))
+            throw PlayerScreenshotError.commandFailed("截图失败：\(message)")
+        }
+        return result
     }
 
     private func doublePropertyLocked(name: String) -> Double {
@@ -508,6 +615,286 @@ final class MPVPlayerController {
     private func log(_ message: String) {
         DispatchQueue.main.async {
             self.onLogMessage?(message)
+        }
+    }
+
+    private func makeScreenshotCaptureLocked(
+        from node: mpv_node,
+        colorSpace: CGColorSpace
+    ) throws -> PlayerScreenshotCapture {
+        let payload = try screenshotPayload(from: node)
+        guard
+            let provider = CGDataProvider(data: payload.data as CFData),
+            let image = CGImage(
+                width: payload.width,
+                height: payload.height,
+                bitsPerComponent: payload.pixelFormat.bitsPerComponent,
+                bitsPerPixel: payload.pixelFormat.bitsPerPixel,
+                bytesPerRow: payload.bytesPerRow,
+                space: colorSpace,
+                bitmapInfo: payload.pixelFormat.bitmapInfo,
+                provider: provider,
+                decode: nil,
+                shouldInterpolate: false,
+                intent: .defaultIntent
+            )
+        else {
+            throw PlayerScreenshotError.imageCreationFailed
+        }
+        return PlayerScreenshotCapture(image: image)
+    }
+
+    private func screenshotPayload(from node: mpv_node) throws
+        -> ScreenshotPayload
+    {
+        guard node.format == MPV_FORMAT_NODE_MAP, let list = node.u.list else {
+            throw PlayerScreenshotError.invalidPayload(
+                "mpv 原始截图返回格式异常。"
+            )
+        }
+
+        let availableKeys = screenshotPayloadKeys(list: list)
+        guard
+            let width = intValue(in: list, forKey: "w"),
+            let height = intValue(in: list, forKey: "h"),
+            let bytesPerRow = intValue(in: list, forKey: "stride"),
+            let formatName = stringValue(in: list, forKey: "format"),
+            let byteArray = dataValue(in: list, forKey: "data"),
+            let pixelFormat = ScreenshotPixelFormat(mpvFormat: formatName)
+        else {
+            throw PlayerScreenshotError.invalidPayload(
+                "mpv 原始截图数据不完整：\(availableKeys.joined(separator: ", "))"
+            )
+        }
+
+        guard width > 0, height > 0, bytesPerRow > 0 else {
+            throw PlayerScreenshotError.invalidPayload("mpv 原始截图尺寸无效。")
+        }
+
+        let minimumBytes = bytesPerRow * height
+        guard byteArray.count >= minimumBytes else {
+            throw PlayerScreenshotError.invalidPayload("mpv 原始截图数据长度不足。")
+        }
+
+        return ScreenshotPayload(
+            width: width,
+            height: height,
+            bytesPerRow: bytesPerRow,
+            pixelFormat: pixelFormat,
+            data: Data(byteArray.prefix(minimumBytes))
+        )
+    }
+
+    private func screenshotPayloadKeys(
+        list: UnsafeMutablePointer<mpv_node_list>
+    )
+        -> [String]
+    {
+        guard let keys = list.pointee.keys else { return [] }
+        return (0..<Int(list.pointee.num)).compactMap { index in
+            guard let key = keys[index] else { return nil }
+            return String(cString: key)
+        }
+    }
+
+    private func nodeValue(
+        in list: UnsafeMutablePointer<mpv_node_list>,
+        forKey key: String
+    ) -> mpv_node? {
+        guard let keys = list.pointee.keys, let values = list.pointee.values
+        else {
+            return nil
+        }
+        for index in 0..<Int(list.pointee.num) {
+            guard let rawKey = keys[index] else { continue }
+            if String(cString: rawKey) == key {
+                return values[index]
+            }
+        }
+        return nil
+    }
+
+    private func intValue(
+        in list: UnsafeMutablePointer<mpv_node_list>,
+        forKey key: String
+    ) -> Int? {
+        guard let value = nodeValue(in: list, forKey: key) else { return nil }
+        switch value.format {
+        case MPV_FORMAT_INT64:
+            return Int(value.u.int64)
+        case MPV_FORMAT_DOUBLE:
+            return Int(value.u.double_)
+        default:
+            return nil
+        }
+    }
+
+    private func stringValue(
+        in list: UnsafeMutablePointer<mpv_node_list>,
+        forKey key: String
+    ) -> String? {
+        guard
+            let value = nodeValue(in: list, forKey: key),
+            value.format == MPV_FORMAT_STRING,
+            let raw = value.u.string
+        else {
+            return nil
+        }
+        return String(cString: raw)
+    }
+
+    private func dataValue(
+        in list: UnsafeMutablePointer<mpv_node_list>,
+        forKey key: String
+    ) -> Data? {
+        guard
+            let value = nodeValue(in: list, forKey: key),
+            value.format == MPV_FORMAT_BYTE_ARRAY,
+            let byteArray = value.u.ba,
+            byteArray.pointee.size > 0,
+            let raw = byteArray.pointee.data
+        else {
+            return nil
+        }
+        return Data(bytes: raw, count: byteArray.pointee.size)
+    }
+
+    private func resolvedScreenshotColorSpaceLocked() -> CGColorSpace {
+        let primaries =
+            stringPropertyLocked(name: "video-out-params/primaries")
+            ?? stringPropertyLocked(name: "video-params/primaries")
+            ?? stringPropertyLocked(name: "target-prim")
+        let transfer =
+            stringPropertyLocked(name: "video-out-params/gamma")
+            ?? stringPropertyLocked(name: "video-params/gamma")
+            ?? stringPropertyLocked(name: "target-trc")
+
+        return Self.screenshotColorSpace(
+            primaries: primaries,
+            transfer: transfer
+        )
+            ?? CGColorSpace(name: CGColorSpace.displayP3)
+            ?? CGColorSpaceCreateDeviceRGB()
+    }
+
+    static func screenshotColorSpace(
+        primaries: String?,
+        transfer: String?
+    ) -> CGColorSpace? {
+        let normalizedPrimaries = primaries?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+        let normalizedTransfer = transfer?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+
+        if let normalizedTransfer {
+            if normalizedTransfer.contains("pq") {
+                if normalizedPrimaries?.contains("p3") == true {
+                    return CGColorSpace(name: CGColorSpace.displayP3_PQ)
+                }
+                return CGColorSpace(name: CGColorSpace.itur_2100_PQ)
+            }
+            if normalizedTransfer.contains("hlg") {
+                if normalizedPrimaries?.contains("p3") == true {
+                    return CGColorSpace(name: CGColorSpace.displayP3_HLG)
+                }
+                return CGColorSpace(name: CGColorSpace.itur_2100_HLG)
+            }
+            if normalizedTransfer == "linear" {
+                if normalizedPrimaries?.contains("2020") == true {
+                    return
+                        CGColorSpace(name: CGColorSpace.extendedLinearITUR_2020)
+                }
+                if normalizedPrimaries?.contains("p3") == true {
+                    return
+                        CGColorSpace(
+                            name: CGColorSpace.extendedLinearDisplayP3
+                        )
+                }
+                return CGColorSpace(name: CGColorSpace.extendedLinearSRGB)
+            }
+        }
+
+        if normalizedPrimaries?.contains("2020") == true {
+            return CGColorSpace(name: CGColorSpace.itur_2020)
+                ?? CGColorSpace(name: CGColorSpace.extendedITUR_2020)
+        }
+        if normalizedPrimaries?.contains("p3") == true {
+            return CGColorSpace(name: CGColorSpace.displayP3)
+        }
+        if normalizedPrimaries?.contains("xyz") == true {
+            return CGColorSpace(name: CGColorSpace.genericXYZ)
+        }
+        return CGColorSpace(name: CGColorSpace.itur_709)
+            ?? CGColorSpace(name: CGColorSpace.sRGB)
+    }
+}
+
+private struct ScreenshotPayload {
+    let width: Int
+    let height: Int
+    let bytesPerRow: Int
+    let pixelFormat: ScreenshotPixelFormat
+    let data: Data
+}
+
+private enum ScreenshotPixelFormat: String {
+    case rgba64
+    case bgra
+    case rgba
+
+    static let captureOrder: [ScreenshotPixelFormat] = [.rgba64, .bgra, .rgba]
+
+    init?(mpvFormat: String) {
+        self.init(rawValue: mpvFormat.lowercased())
+    }
+
+    var mpvArgument: String {
+        rawValue
+    }
+
+    var bitsPerComponent: Int {
+        switch self {
+        case .rgba64:
+            return 16
+        case .bgra, .rgba:
+            return 8
+        }
+    }
+
+    var bitsPerPixel: Int {
+        switch self {
+        case .rgba64:
+            return 64
+        case .bgra, .rgba:
+            return 32
+        }
+    }
+
+    var bitmapInfo: CGBitmapInfo {
+        switch self {
+        case .rgba64:
+            return [
+                .byteOrder16Little,
+                CGBitmapInfo(
+                    rawValue: CGImageAlphaInfo.premultipliedLast.rawValue
+                ),
+            ]
+        case .bgra:
+            return [
+                .byteOrder32Little,
+                CGBitmapInfo(
+                    rawValue: CGImageAlphaInfo.premultipliedFirst.rawValue
+                ),
+            ]
+        case .rgba:
+            return [
+                .byteOrder32Big,
+                CGBitmapInfo(
+                    rawValue: CGImageAlphaInfo.premultipliedLast.rawValue
+                ),
+            ]
         }
     }
 }

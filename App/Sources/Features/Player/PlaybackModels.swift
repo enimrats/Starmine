@@ -74,6 +74,84 @@ struct PlaybackSnapshot: Equatable {
     }
 }
 
+enum PlaybackCaptureNaming {
+    static func baseName(
+        title: String,
+        episodeLabel: String,
+        collectionTitle: String?,
+        assetURL: URL?
+    ) -> String {
+        let normalizedTitle =
+            title.nilIfBlank.flatMap {
+                assetURL?.isFileURL == true
+                    ? URL(fileURLWithPath: $0).deletingPathExtension()
+                        .lastPathComponent.nilIfBlank ?? $0
+                    : $0
+            }
+            ?? assetURL.map {
+                $0.isFileURL
+                    ? $0.deletingPathExtension().lastPathComponent
+                    : $0.lastPathComponent.nilIfBlank
+                        .map {
+                            URL(fileURLWithPath: $0).deletingPathExtension()
+                                .lastPathComponent
+                        }
+                        ?? $0.absoluteString
+            }
+            ?? "Starmine"
+        let normalizedCollection =
+            collectionTitle?.nilIfBlank ?? normalizedTitle.nilIfBlank
+        let normalizedEpisode = episodeLabel.nilIfBlank
+
+        if let normalizedEpisode {
+            let prefix = normalizedCollection ?? normalizedTitle
+            return "\(prefix)-\(normalizedEpisode)"
+        }
+
+        if let normalizedCollection,
+            normalizedCollection.caseInsensitiveCompare(normalizedTitle)
+                != .orderedSame
+        {
+            return "\(normalizedCollection)-\(normalizedTitle)"
+        }
+
+        return normalizedCollection ?? normalizedTitle
+    }
+
+    static func timestamp(for positionSeconds: Double) -> String {
+        let totalSeconds = max(0, Int(positionSeconds.rounded(.down)))
+        let hours = totalSeconds / 3600
+        let minutes = (totalSeconds % 3600) / 60
+        let seconds = totalSeconds % 60
+        return String(format: "%02d-%02d-%02d", hours, minutes, seconds)
+    }
+
+    static func filename(
+        title: String,
+        episodeLabel: String,
+        collectionTitle: String?,
+        assetURL: URL?,
+        positionSeconds: Double,
+        fileExtension: String
+    ) -> String {
+        let base = baseName(
+            title: title,
+            episodeLabel: episodeLabel,
+            collectionTitle: collectionTitle,
+            assetURL: assetURL
+        )
+        .sanitizedFilenameComponent(fallback: "capture")
+        let timestamp = timestamp(for: positionSeconds)
+        let normalizedExtension =
+            fileExtension.trimmingCharacters(
+                in: CharacterSet(charactersIn: ".")
+            )
+            .lowercased()
+            .nilIfBlank ?? "png"
+        return "\(base)-\(timestamp).\(normalizedExtension)"
+    }
+}
+
 struct PlaybackTimebase: Equatable {
     var position: Double = 0
     var duration: Double = 0

@@ -20,6 +20,7 @@ import SwiftUI
 
     struct PlaybackShortcutMonitor: NSViewRepresentable {
         let onTogglePause: () -> Void
+        let onCaptureScreenshot: () -> Void
         let onToggleFullscreen: () -> Void
         let onSeekBackward: () -> Void
         let onSeekForward: () -> Void
@@ -28,6 +29,7 @@ import SwiftUI
         func makeNSView(context: Context) -> PlaybackShortcutMonitorView {
             let view = PlaybackShortcutMonitorView()
             view.onTogglePause = onTogglePause
+            view.onCaptureScreenshot = onCaptureScreenshot
             view.onToggleFullscreen = onToggleFullscreen
             view.onSeekBackward = onSeekBackward
             view.onSeekForward = onSeekForward
@@ -40,6 +42,7 @@ import SwiftUI
             context: Context
         ) {
             nsView.onTogglePause = onTogglePause
+            nsView.onCaptureScreenshot = onCaptureScreenshot
             nsView.onToggleFullscreen = onToggleFullscreen
             nsView.onSeekBackward = onSeekBackward
             nsView.onSeekForward = onSeekForward
@@ -49,6 +52,7 @@ import SwiftUI
 
     final class PlaybackShortcutMonitorView: NSView {
         var onTogglePause: (() -> Void)?
+        var onCaptureScreenshot: (() -> Void)?
         var onToggleFullscreen: (() -> Void)?
         var onSeekBackward: (() -> Void)?
         var onSeekForward: (() -> Void)?
@@ -123,6 +127,9 @@ import SwiftUI
             case " ":
                 onTogglePause?()
                 return nil
+            case "s":
+                onCaptureScreenshot?()
+                return nil
             case "f":
                 onToggleFullscreen?()
                 return nil
@@ -147,10 +154,12 @@ import SwiftUI
         let onSingleTap: () -> Void
         let onDoubleTap: (_ isLeadingHalf: Bool) -> Void
         let onHorizontalPanBegan: () -> Void
-        let onHorizontalPanChanged: (_ translationX: CGFloat, _ width: CGFloat)
-            -> Void
-        let onHorizontalPanEnded: (_ translationX: CGFloat, _ width: CGFloat)
-            -> Void
+        let onHorizontalPanChanged:
+            (_ translationX: CGFloat, _ width: CGFloat)
+                -> Void
+        let onHorizontalPanEnded:
+            (_ translationX: CGFloat, _ width: CGFloat)
+                -> Void
         let onLongPressBegan: () -> Void
         let onLongPressEnded: () -> Void
 
@@ -184,10 +193,16 @@ import SwiftUI
         var onSingleTap: (() -> Void)?
         var onDoubleTap: ((_ isLeadingHalf: Bool) -> Void)?
         var onHorizontalPanBegan: (() -> Void)?
-        var onHorizontalPanChanged: ((_ translationX: CGFloat, _ width: CGFloat)
-            -> Void)?
-        var onHorizontalPanEnded: ((_ translationX: CGFloat, _ width: CGFloat)
-            -> Void)?
+        var onHorizontalPanChanged:
+            (
+                (_ translationX: CGFloat, _ width: CGFloat)
+                    -> Void
+            )?
+        var onHorizontalPanEnded:
+            (
+                (_ translationX: CGFloat, _ width: CGFloat)
+                    -> Void
+            )?
         var onLongPressBegan: (() -> Void)?
         var onLongPressEnded: (() -> Void)?
 
@@ -242,7 +257,8 @@ import SwiftUI
         override func gestureRecognizerShouldBegin(
             _ gestureRecognizer: UIGestureRecognizer
         ) -> Bool {
-            guard let panRecognizer = gestureRecognizer as? UIPanGestureRecognizer
+            guard
+                let panRecognizer = gestureRecognizer as? UIPanGestureRecognizer
             else {
                 return true
             }

@@ -2858,9 +2858,9 @@ extension JellyfinStore {
                 continue
             }
 
-            let sanitizedName = sanitizedFilenameComponent(
-                stream.languageCode ?? stream.title ?? "subtitle"
-            )
+            let sanitizedName =
+                (stream.languageCode ?? stream.title ?? "subtitle")
+                .sanitizedFilenameComponent()
             let filename =
                 "subtitle-\(stream.index)-\(sanitizedName).\(stream.fileExtension)"
             let destinationURL = directoryURL.appendingPathComponent(filename)
@@ -2961,17 +2961,6 @@ extension JellyfinStore {
     fileprivate func fileSize(at url: URL) -> Int64? {
         let values = try? url.resourceValues(forKeys: [.fileSizeKey])
         return values?.fileSize.map(Int64.init)
-    }
-
-    fileprivate func sanitizedFilenameComponent(_ rawValue: String) -> String {
-        let invalidCharacters = CharacterSet(charactersIn: "/:\\?%*|\"<>")
-        let cleaned =
-            rawValue
-            .components(separatedBy: invalidCharacters)
-            .joined(separator: "-")
-            .replacingOccurrences(of: " ", with: "-")
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        return cleaned.nilIfBlank ?? "item"
     }
 
     fileprivate func clearOfflineNavigation() {

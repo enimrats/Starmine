@@ -489,4 +489,46 @@ final class DanmakuFeatureStoreTests: XCTestCase {
             2
         )
     }
+
+    func testMakeCaptureOverlayRendersToScreenshotViewport() {
+        let store = DanmakuFeatureStore(client: MockDandanplayClient())
+        store.renderer.load([
+            DanmakuComment(
+                time: 0.0,
+                text: "overlay",
+                presentation: .scroll,
+                color: .white
+            ),
+        ])
+
+        store.renderer.sync(
+            playbackTime: 2.5,
+            viewportSize: CGSize(width: 1440, height: 900),
+            metrics: .playbackChrome
+        )
+
+        guard
+            let overlay = store.makeCaptureOverlay(
+                playbackTime: 2.5,
+                viewportSize: CGSize(width: 1920, height: 1080)
+            )
+        else {
+            return XCTFail("expected metal capture overlay")
+        }
+
+        XCTAssertEqual(overlay.width, 1920)
+        XCTAssertEqual(overlay.height, 1080)
+        XCTAssertTrue(imageContainsVisiblePixels(overlay))
+    }
+
+    private func imageContainsVisiblePixels(_ image: CGImage) -> Bool {
+        guard let data = image.dataProvider?.data else { return false }
+        let length = CFDataGetLength(data)
+        guard length > 0, let bytes = CFDataGetBytePtr(data) else {
+            return false
+        }
+        return UnsafeBufferPointer(start: bytes, count: length).contains {
+            $0 != 0
+        }
+    }
 }

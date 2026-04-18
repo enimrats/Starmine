@@ -337,6 +337,10 @@ struct RootView: View {
                             guard hasActivePlayback else { return }
                             coordinator.togglePause()
                         },
+                        onCaptureScreenshot: {
+                            guard hasActivePlayback else { return }
+                            captureScreenshotAction()
+                        },
                         onToggleFullscreen: {
                             guard hasActivePlayback else { return }
                             toggleVideoFullscreen()
@@ -1169,6 +1173,19 @@ struct RootView: View {
                     if abs(currentPlaybackRate - 1.0) > 0.01 {
                         PillLabel(text: playbackRateText(currentPlaybackRate))
                     }
+                    if coordinator.isCapturingScreenshot {
+                        ProgressView()
+                            .tint(.white)
+                            .padding(.horizontal, 4)
+                    }
+                    if let screenshotFeedbackMessage =
+                        coordinator.screenshotFeedbackMessage
+                    {
+                        StatPill(
+                            text: screenshotFeedbackMessage,
+                            emphasized: true
+                        )
+                    }
                     if danmaku.isLoadingDanmaku {
                         ProgressView()
                             .tint(.white)
@@ -1386,6 +1403,13 @@ struct RootView: View {
                 playback.danmakuEnabled.toggle()
             }
 
+            chromeButton(
+                systemName: "camera",
+                disabled: coordinator.isCapturingScreenshot
+            ) {
+                captureScreenshotAction()
+            }
+
             #if !os(macOS)
                 chromeButton(systemName: "text.magnifyingglass") {
                     showMobileDanmakuSheet()
@@ -1466,6 +1490,13 @@ struct RootView: View {
                     }
                     chromeButton(systemName: "text.magnifyingglass", size: 32) {
                         showMobileDanmakuSheet()
+                    }
+                    chromeButton(
+                        systemName: "camera",
+                        disabled: coordinator.isCapturingScreenshot,
+                        size: 32
+                    ) {
+                        captureScreenshotAction()
                     }
                     chromeButton(
                         systemName: isIOSVideoFullscreen
@@ -1561,6 +1592,15 @@ struct RootView: View {
                                 ? "text.bubble.fill" : "text.bubble"
                         )
                     }
+                }
+
+                Section("截图") {
+                    Button {
+                        captureScreenshotAction()
+                    } label: {
+                        Label("保存截图", systemImage: "camera")
+                    }
+                    .disabled(coordinator.isCapturingScreenshot)
                 }
 
                 playbackSettingsMenuContent
@@ -1990,6 +2030,11 @@ struct RootView: View {
             guard playbackChromeVisible else { return }
             schedulePlaybackChromeAutoHide()
         #endif
+    }
+
+    private func captureScreenshotAction() {
+        notePlaybackInteraction()
+        coordinator.captureScreenshot()
     }
 
     private func showPlaybackChrome() {

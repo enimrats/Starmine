@@ -257,6 +257,24 @@ final class PlaybackStore: ObservableObject {
         player.addExternalSubtitle(url)
     }
 
+    func captureScreenshot() async throws -> PlayerScreenshotCapture {
+        try await player.captureScreenshot()
+    }
+
+    func suggestedCaptureFilename(
+        fileExtension: String,
+        positionSeconds: Double
+    ) -> String {
+        PlaybackCaptureNaming.filename(
+            title: currentVideoTitle,
+            episodeLabel: currentEpisodeLabel,
+            collectionTitle: currentCollectionTitle,
+            assetURL: currentVideoURL,
+            positionSeconds: positionSeconds,
+            fileExtension: fileExtension
+        )
+    }
+
     static func shouldSurfacePlayerError(_ message: String) -> Bool {
         let normalized = message.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !normalized.isEmpty else { return false }

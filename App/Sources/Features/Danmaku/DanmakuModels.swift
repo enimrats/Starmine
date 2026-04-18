@@ -60,6 +60,15 @@ struct DanmakuColor: Codable, Hashable {
             Float(min(max(opacity, 0), 1))
         )
     }
+
+    func cgColor(opacity: Double) -> CGColor {
+        CGColor(
+            red: red,
+            green: green,
+            blue: blue,
+            alpha: min(max(opacity, 0), 1)
+        )
+    }
 }
 
 enum DanmakuFontStyle: String, Codable, CaseIterable, Hashable, Identifiable {
@@ -298,6 +307,12 @@ struct DanmakuLayoutMetrics: Hashable {
         topInset: 26,
         bottomInset: 118,
         horizontalInset: 0
+    )
+
+    static let capture = DanmakuLayoutMetrics(
+        topInset: 24,
+        bottomInset: 24,
+        horizontalInset: 18
     )
 }
 

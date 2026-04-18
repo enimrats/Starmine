@@ -1,5 +1,13 @@
 import Combine
+import CoreGraphics
+import CoreImage
 import Foundation
+import ImageIO
+import UniformTypeIdentifiers
+
+#if os(iOS)
+    import Photos
+#endif
 
 private struct RemotePlaybackPulse: Equatable {
     var loaded: Bool
@@ -11,12 +19,15 @@ private struct RemotePlaybackPulse: Equatable {
 @MainActor
 final class AppCoordinator: ObservableObject {
     @Published var errorState: AppErrorState?
+    @Published private(set) var isCapturingScreenshot = false
+    @Published private(set) var screenshotFeedbackMessage: String?
 
     let playback: PlaybackStore
     let danmaku: DanmakuFeatureStore
     let jellyfin: JellyfinStore
 
     private var cancellables: Set<AnyCancellable> = []
+    private var screenshotFeedbackDismissTask: Task<Void, Never>?
 
     convenience init() {
         self.init(
@@ -133,6 +144,13 @@ final class AppCoordinator: ObservableObject {
 
     var canPlayNextEpisode: Bool {
         playback.canPlayNextEpisode
+    }
+
+    func captureScreenshot() {
+        guard !isCapturingScreenshot else { return }
+        Task { [weak self] in
+            await self?.captureScreenshotAsync()
+        }
     }
 
     func jellyfinLibraryImageURL(
@@ -1057,7 +1075,483 @@ final class AppCoordinator: ObservableObject {
         await stopOfflinePlaybackIfNeeded(finished: finished)
     }
 
+    private func captureScreenshotAsync() async {
+        guard playback.currentVideoURL != nil, playback.snapshot.loaded else {
+            errorState = AppErrorState(message: "当前没有可截图的视频。")
+            return
+        }
+
+        let playbackPosition = resolvedCapturePlaybackPosition()
+        isCapturingScreenshot = true
+        defer { isCapturingScreenshot = false }
+
+        var temporaryURLs: [URL] = []
+        defer {
+            for url in temporaryURLs {
+                try? FileManager.default.removeItem(at: url)
+            }
+        }
+
+        do {
+            let capture = try await playback.captureScreenshot()
+            let sourceImage = LoadedScreenshotImage(
+                image: capture.image,
+                type: nil
+            )
+            let baseImage = sourceImage.image
+            let captureViewport = CGSize(
+                width: baseImage.width,
+                height: baseImage.height
+            )
+
+            let overlay: CGImage?
+            if playback.danmakuEnabled {
+                overlay = danmaku.makeCaptureOverlay(
+                    playbackTime: playbackPosition,
+                    viewportSize: captureViewport
+                )
+            } else {
+                overlay = nil
+            }
+
+            let finalCaptureURL = try exportScreenshot(
+                sourceImage: sourceImage,
+                overlay: overlay
+            )
+            temporaryURLs.append(finalCaptureURL)
+
+            let filename = playback.suggestedCaptureFilename(
+                fileExtension: finalCaptureURL.pathExtension,
+                positionSeconds: playbackPosition
+            )
+
+            #if os(macOS)
+                let destinationURL = try saveScreenshotToDesktop(
+                    from: finalCaptureURL,
+                    filename: filename
+                )
+                showScreenshotFeedback(
+                    "已保存到桌面 · \(destinationURL.lastPathComponent)"
+                )
+            #else
+                try await saveScreenshotToPhotoLibrary(
+                    from: finalCaptureURL,
+                    filename: filename
+                )
+                showScreenshotFeedback("已保存到系统相册")
+            #endif
+        } catch {
+            handleError(error)
+        }
+    }
+
+    private func resolvedCapturePlaybackPosition() -> Double {
+        if playback.timebase.loaded {
+            return playback.timebase.resolvedPosition(at: Date())
+        }
+        return playback.snapshot.position
+    }
+
+    private func exportScreenshot(
+        sourceImage: LoadedScreenshotImage,
+        overlay: CGImage?
+    ) throws -> URL {
+        let outputColorSpace =
+            sourceImage.image.colorSpace
+            ?? CGColorSpace(name: CGColorSpace.displayP3)
+            ?? CGColorSpaceCreateDeviceRGB()
+        let outputFormats = resolvedScreenshotExportFormats(
+            for: sourceImage.image,
+            sourceType: sourceImage.type,
+            hasOverlay: overlay != nil
+        )
+
+        let baseCIImage = CIImage(
+            cgImage: sourceImage.image,
+            options: [.colorSpace: outputColorSpace]
+        )
+        let finalCIImage: CIImage
+        if let overlay {
+            let overlayColorSpace =
+                CGColorSpace(name: CGColorSpace.sRGB)
+                ?? CGColorSpaceCreateDeviceRGB()
+            let overlayCIImage = CIImage(
+                cgImage: overlay,
+                options: [.colorSpace: overlayColorSpace]
+            )
+            finalCIImage = overlayCIImage.composited(over: baseCIImage)
+        } else {
+            finalCIImage = baseCIImage
+        }
+
+        let context = CIContext(
+            options: [
+                .cacheIntermediates: false,
+                .workingColorSpace: outputColorSpace,
+                .outputColorSpace: outputColorSpace,
+            ]
+        )
+        var lastError: Error?
+        for outputFormat in outputFormats {
+            do {
+                return try writeScreenshotImage(
+                    finalCIImage,
+                    colorSpace: outputColorSpace,
+                    format: outputFormat,
+                    context: context
+                )
+            } catch {
+                lastError = error
+            }
+        }
+
+        throw lastError ?? ScreenshotCaptureError.exportFailed
+    }
+
+    private func resolvedScreenshotExportFormats(
+        for image: CGImage,
+        sourceType: UTType?,
+        hasOverlay: Bool
+    ) -> [ScreenshotExportFormat] {
+        let isHDR =
+            image.colorSpace.map(Self.isHDRScreenshotColorSpace(_:)) ?? false
+        return ScreenshotExportFormat.preferredFormats(
+            isHDR: isHDR,
+            sourceType: sourceType,
+            hasOverlay: hasOverlay
+        )
+        .filter(Self.supportsScreenshotExportFormat(_:))
+    }
+
+    private func writeScreenshotImage(
+        _ image: CIImage,
+        colorSpace: CGColorSpace,
+        format: ScreenshotExportFormat,
+        context: CIContext
+    ) throws -> URL {
+        let destinationURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: false)
+            .appendingPathExtension(format.fileExtension)
+
+        do {
+            switch format {
+            case .png:
+                try context.writePNGRepresentation(
+                    of: image,
+                    to: destinationURL,
+                    format: .RGBA16,
+                    colorSpace: colorSpace,
+                    options: [:]
+                )
+            case .jpegXL:
+                guard #available(macOS 15.2, iOS 18.2, *) else {
+                    throw ScreenshotCaptureError.exportFailed
+                }
+                guard
+                    let cgImage = context.createCGImage(
+                        image,
+                        from: image.extent.integral,
+                        format: .RGBA16,
+                        colorSpace: colorSpace
+                    )
+                else {
+                    throw ScreenshotCaptureError.exportFailed
+                }
+                try writeImageDestination(
+                    cgImage,
+                    to: destinationURL,
+                    type: UTType.jpegxl,
+                    properties: [
+                        kCGImageDestinationLossyCompressionQuality: 1.0
+                    ]
+                )
+            case .heifLossless:
+                let options: [CIImageRepresentationOption: Any] = [
+                    CIImageRepresentationOption(
+                        rawValue: kCGImageDestinationLossyCompressionQuality
+                            as String
+                    ): 1.0
+                ]
+                try context.writeHEIFRepresentation(
+                    of: image,
+                    to: destinationURL,
+                    format: .RGBA16,
+                    colorSpace: colorSpace,
+                    options: options
+                )
+            case .heif10:
+                let options: [CIImageRepresentationOption: Any] = [
+                    CIImageRepresentationOption(
+                        rawValue: kCGImageDestinationLossyCompressionQuality
+                            as String
+                    ): 1.0
+                ]
+                try context.writeHEIF10Representation(
+                    of: image,
+                    to: destinationURL,
+                    colorSpace: colorSpace,
+                    options: options
+                )
+            case .tiff:
+                try context.writeTIFFRepresentation(
+                    of: image,
+                    to: destinationURL,
+                    format: .RGBA16,
+                    colorSpace: colorSpace,
+                    options: [:]
+                )
+            }
+            return destinationURL
+        } catch {
+            try? FileManager.default.removeItem(at: destinationURL)
+            throw error
+        }
+    }
+
+    private func writeImageDestination(
+        _ image: CGImage,
+        to url: URL,
+        type: UTType,
+        properties: [CFString: Any]
+    ) throws {
+        guard
+            let destination = CGImageDestinationCreateWithURL(
+                url as CFURL,
+                type.identifier as CFString,
+                1,
+                nil
+            )
+        else {
+            throw ScreenshotCaptureError.exportFailed
+        }
+        CGImageDestinationAddImage(
+            destination,
+            image,
+            properties as CFDictionary
+        )
+        guard CGImageDestinationFinalize(destination) else {
+            throw ScreenshotCaptureError.exportFailed
+        }
+    }
+
+    #if os(macOS)
+        private func saveScreenshotToDesktop(
+            from sourceURL: URL,
+            filename: String
+        ) throws -> URL {
+            guard
+                let desktopURL = FileManager.default.urls(
+                    for: .desktopDirectory,
+                    in: .userDomainMask
+                ).first
+            else {
+                throw ScreenshotCaptureError.desktopUnavailable
+            }
+
+            let destinationURL = uniqueScreenshotURL(
+                in: desktopURL,
+                preferredFilename: filename
+            )
+            try FileManager.default.moveItem(at: sourceURL, to: destinationURL)
+            return destinationURL
+        }
+    #else
+        private func saveScreenshotToPhotoLibrary(
+            from sourceURL: URL,
+            filename: String
+        ) async throws {
+            let authorizationStatus =
+                await withCheckedContinuation { continuation in
+                    PHPhotoLibrary.requestAuthorization(for: .addOnly) {
+                        continuation.resume(returning: $0)
+                    }
+                }
+            guard
+                authorizationStatus == .authorized
+                    || authorizationStatus == .limited
+            else {
+                throw ScreenshotCaptureError.photoLibraryPermissionDenied
+            }
+
+            let typeIdentifier =
+                UTType(filenameExtension: sourceURL.pathExtension)?.identifier
+                ?? UTType.png.identifier
+
+            try await withCheckedThrowingContinuation {
+                (continuation: CheckedContinuation<Void, Error>) in
+                PHPhotoLibrary.shared().performChanges({
+                    let request = PHAssetCreationRequest.forAsset()
+                    let options = PHAssetResourceCreationOptions()
+                    options.originalFilename = filename
+                    options.uniformTypeIdentifier = typeIdentifier
+                    request.addResource(
+                        with: .photo,
+                        fileURL: sourceURL,
+                        options: options
+                    )
+                }) { success, error in
+                    if let error {
+                        continuation.resume(throwing: error)
+                    } else if success {
+                        continuation.resume(returning: ())
+                    } else {
+                        continuation.resume(
+                            throwing: ScreenshotCaptureError
+                                .photoLibrarySaveFailed
+                        )
+                    }
+                }
+            }
+        }
+    #endif
+
+    private func uniqueScreenshotURL(
+        in directoryURL: URL,
+        preferredFilename: String
+    ) -> URL {
+        let preferredURL = directoryURL.appendingPathComponent(
+            preferredFilename,
+            isDirectory: false
+        )
+        guard !FileManager.default.fileExists(atPath: preferredURL.path) else {
+            let baseName = preferredURL.deletingPathExtension()
+                .lastPathComponent
+            let fileExtension = preferredURL.pathExtension
+            for index in 1...999 {
+                let candidateURL = directoryURL.appendingPathComponent(
+                    "\(baseName)-\(index).\(fileExtension)",
+                    isDirectory: false
+                )
+                if !FileManager.default.fileExists(atPath: candidateURL.path) {
+                    return candidateURL
+                }
+            }
+            return directoryURL.appendingPathComponent(
+                "\(baseName)-\(UUID().uuidString.prefix(8)).\(fileExtension)",
+                isDirectory: false
+            )
+        }
+        return preferredURL
+    }
+
+    private func showScreenshotFeedback(_ message: String) {
+        screenshotFeedbackDismissTask?.cancel()
+        screenshotFeedbackMessage = message
+        screenshotFeedbackDismissTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 2_500_000_000)
+            await MainActor.run {
+                self?.screenshotFeedbackMessage = nil
+            }
+        }
+    }
+
     private func handleError(_ error: Error) {
         errorState = AppErrorState(message: error.localizedDescription)
+    }
+
+    private static func supportsScreenshotExportFormat(
+        _ format: ScreenshotExportFormat
+    ) -> Bool {
+        switch format {
+        case .png, .heifLossless, .heif10, .tiff:
+            return true
+        case .jpegXL:
+            guard #available(macOS 15.2, iOS 18.2, *) else { return false }
+            let supportedTypes =
+                CGImageDestinationCopyTypeIdentifiers() as? [String] ?? []
+            return supportedTypes.contains(UTType.jpegxl.identifier)
+        }
+    }
+
+    private static func isHDRScreenshotColorSpace(_ colorSpace: CGColorSpace)
+        -> Bool
+    {
+        if CGColorSpaceUsesITUR_2100TF(colorSpace)
+            || CGColorSpaceIsPQBased(colorSpace)
+            || CGColorSpaceIsHLGBased(colorSpace)
+        {
+            return true
+        }
+
+        let extendedNames: Set<CFString> = [
+            CGColorSpace.extendedSRGB,
+            CGColorSpace.extendedLinearSRGB,
+            CGColorSpace.extendedLinearDisplayP3,
+            CGColorSpace.extendedITUR_2020,
+            CGColorSpace.extendedLinearITUR_2020,
+            CGColorSpace.displayP3_PQ,
+            CGColorSpace.displayP3_HLG,
+            CGColorSpace.itur_2100_PQ,
+            CGColorSpace.itur_2100_HLG,
+        ]
+        return colorSpace.name.map { extendedNames.contains($0) } ?? false
+    }
+}
+
+private struct LoadedScreenshotImage {
+    let image: CGImage
+    let type: UTType?
+}
+
+private enum ScreenshotExportFormat: Equatable {
+    case png
+    case jpegXL
+    case heifLossless
+    case heif10
+    case tiff
+
+    var fileExtension: String {
+        switch self {
+        case .png:
+            return "png"
+        case .jpegXL:
+            return "jxl"
+        case .heifLossless, .heif10:
+            return "heic"
+        case .tiff:
+            return "tiff"
+        }
+    }
+
+    static func preferredFormats(
+        isHDR: Bool,
+        sourceType: UTType?,
+        hasOverlay: Bool
+    ) -> [ScreenshotExportFormat] {
+        if isHDR {
+            if !hasOverlay,
+                sourceType == .png
+            {
+                return [.heif10, .jpegXL, .heifLossless, .tiff, .png]
+            }
+            return [.heif10, .jpegXL, .heifLossless, .tiff, .png]
+        }
+
+        if !hasOverlay,
+            sourceType == .png
+        {
+            return [.png, .jpegXL, .heifLossless, .tiff]
+        }
+        return [.png, .jpegXL, .heifLossless, .tiff]
+    }
+}
+
+private enum ScreenshotCaptureError: LocalizedError {
+    case exportFailed
+    case desktopUnavailable
+    case photoLibraryPermissionDenied
+    case photoLibrarySaveFailed
+
+    var errorDescription: String? {
+        switch self {
+        case .exportFailed:
+            return "截图导出失败。"
+        case .desktopUnavailable:
+            return "无法定位桌面目录。"
+        case .photoLibraryPermissionDenied:
+            return "没有系统相册写入权限。"
+        case .photoLibrarySaveFailed:
+            return "保存到系统相册失败。"
+        }
     }
 }
