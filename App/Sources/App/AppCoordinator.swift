@@ -366,6 +366,21 @@ final class AppCoordinator: ObservableObject {
         }
     }
 
+    func removeJellyfinRoute(accountID: UUID, routeID: UUID) {
+        Task { [weak self] in
+            guard let self else { return }
+            do {
+                try await self.jellyfin.removeRoute(
+                    accountID: accountID,
+                    routeID: routeID
+                )
+                self.syncJellyfinNavigation()
+            } catch {
+                self.handleError(error)
+            }
+        }
+    }
+
     func refreshJellyfinLibrary() {
         Task { [weak self] in
             guard let self else { return }

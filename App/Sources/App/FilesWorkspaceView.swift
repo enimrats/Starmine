@@ -8,6 +8,20 @@ private struct JellyfinServerGroup: Identifiable {
     var id: String { serverID }
 }
 
+private enum PendingJellyfinRemoval: Identifiable {
+    case account(JellyfinAccountProfile)
+    case route(account: JellyfinAccountProfile, route: JellyfinRoute)
+
+    var id: String {
+        switch self {
+        case let .account(account):
+            return "account-\(account.id.uuidString)"
+        case let .route(account, route):
+            return "route-\(account.id.uuidString)-\(route.id.uuidString)"
+        }
+    }
+}
+
 struct FilesWorkspaceView: View {
     @ObservedObject var coordinator: AppCoordinator
     @ObservedObject var jellyfin: JellyfinStore
@@ -23,7 +37,7 @@ struct FilesWorkspaceView: View {
     @State private var jellyfinRouteName = ""
     @State private var jellyfinAdditionalRouteURL = ""
     @State private var jellyfinAdditionalRouteName = ""
-    @State private var pendingJellyfinAccountRemoval: JellyfinAccountProfile?
+    @State private var pendingJellyfinRemoval: PendingJellyfinRemoval?
     @State private var offlineSearchQuery = ""
 
     var body: some View {
@@ -77,25 +91,27 @@ struct FilesWorkspaceView: View {
             .padding(.bottom, prefersTouchLayout ? 40 : 40)
         }
         .alert(
-            "删除已连接的媒体库？",
-            isPresented: jellyfinAccountRemovalAlertPresented
-        ) {
+            jellyfinRemovalAlertTitle,
+            isPresented: jellyfinRemovalAlertPresented,
+            presenting: pendingJellyfinRemoval
+        ) { removal in
             Button("删除", role: .destructive) {
-                guard let account = pendingJellyfinAccountRemoval else {
-                    return
+                switch removal {
+                case let .account(account):
+                    coordinator.removeJellyfinAccount(account.id)
+                case let .route(account, route):
+                    coordinator.removeJellyfinRoute(
+                        accountID: account.id,
+                        routeID: route.id
+                    )
                 }
-                coordinator.removeJellyfinAccount(account.id)
-                pendingJellyfinAccountRemoval = nil
+                pendingJellyfinRemoval = nil
             }
             Button("取消", role: .cancel) {
-                pendingJellyfinAccountRemoval = nil
+                pendingJellyfinRemoval = nil
             }
-        } message: {
-            if let account = pendingJellyfinAccountRemoval {
-                Text(
-                    "将移除“\(account.displayTitle)”及其保存的线路配置，此操作无法撤销。"
-                )
-            }
+        } message: { removal in
+            Text(jellyfinRemovalAlertMessage(for: removal))
         }
     }
 
@@ -682,7 +698,7 @@ struct FilesWorkspaceView: View {
             .buttonStyle(.plain)
             .contextMenu {
                 Button(role: .destructive) {
-                    pendingJellyfinAccountRemoval = account
+                    pendingJellyfinRemoval = .account(account)
                 } label: {
                     Label("删除媒体库", systemImage: "trash")
                 }
@@ -859,6 +875,19 @@ struct FilesWorkspaceView: View {
                     }
                     .buttonStyle(.bordered)
                     .disabled(isManual)
+
+                    Button(role: .destructive) {
+                        pendingJellyfinRemoval = .route(
+                            account: account,
+                            route: route
+                        )
+                    } label: {
+                        Image(systemName: "trash")
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(Color.red)
+                    .padding(.top, 4)
+                    .accessibilityLabel("删除线路")
                 }
 
                 HStack(spacing: 10) {
@@ -938,6 +967,16 @@ struct FilesWorkspaceView: View {
                         lineWidth: 1
                     )
             }
+            .contextMenu {
+                Button(role: .destructive) {
+                    pendingJellyfinRemoval = .route(
+                        account: account,
+                        route: route
+                    )
+                } label: {
+                    Label("删除线路", systemImage: "trash")
+                }
+            }
         }
     }
 
@@ -951,15 +990,44 @@ struct FilesWorkspaceView: View {
             .clipShape(Capsule(style: .continuous))
     }
 
-    private var jellyfinAccountRemovalAlertPresented: Binding<Bool> {
+    private var jellyfinRemovalAlertTitle: String {
+        switch pendingJellyfinRemoval {
+        case .account:
+            return "删除已连接的媒体库？"
+        case .route:
+            return "删除线路？"
+        case nil:
+            return ""
+        }
+    }
+
+    private var jellyfinRemovalAlertPresented: Binding<Bool> {
         Binding(
-            get: { pendingJellyfinAccountRemoval != nil },
+            get: { pendingJellyfinRemoval != nil },
             set: { presented in
                 if !presented {
-                    pendingJellyfinAccountRemoval = nil
+                    pendingJellyfinRemoval = nil
                 }
             }
         )
+    }
+
+    private func jellyfinRemovalAlertMessage(
+        for removal: PendingJellyfinRemoval
+    ) -> String {
+        switch removal {
+        case let .account(account):
+            return "将移除“\(account.displayTitle)”及其保存的线路配置，此操作无法撤销。"
+        case let .route(account, route):
+            let suffix =
+                if account.routes.count == 1 {
+                    "这是“\(account.displayTitle)”的最后一条线路，删除后会一并移除该媒体库，此操作无法撤销。"
+                } else {
+                    "此操作无法撤销。"
+                }
+            return
+                "将移除线路“\(route.name)”（\(route.normalizedURL)）。\(suffix)"
+        }
     }
 
     private var filteredOfflineEntries: [JellyfinOfflineEntry] {

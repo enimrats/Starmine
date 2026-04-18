@@ -447,6 +447,18 @@ struct JellyfinAccountProfile: Identifiable, Codable, Hashable {
         }
         return copy
     }
+
+    func removingRoute(_ routeID: UUID) -> JellyfinAccountProfile {
+        var copy = self
+        copy.routes.removeAll(where: { $0.id == routeID })
+        if copy.manualRouteID == routeID {
+            copy.manualRouteID = nil
+        }
+        if copy.lastSuccessfulRouteID == routeID {
+            copy.lastSuccessfulRouteID = nil
+        }
+        return copy
+    }
 }
 
 struct JellyfinStoreSnapshot: Hashable {

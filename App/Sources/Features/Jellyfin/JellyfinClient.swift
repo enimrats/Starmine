@@ -11,6 +11,8 @@ protocol JellyfinClientProtocol {
     func setActiveAccount(_ accountID: UUID) async throws
         -> JellyfinStoreSnapshot
     func removeAccount(_ accountID: UUID) async throws -> JellyfinStoreSnapshot
+    func removeRoute(accountID: UUID, routeID: UUID) async throws
+        -> JellyfinStoreSnapshot
     func addRoute(accountID: UUID, serverURL: String, routeName: String?)
         async throws -> JellyfinStoreSnapshot
     func switchRoute(accountID: UUID, routeID: UUID) async throws
@@ -208,6 +210,48 @@ actor JellyfinClient: JellyfinClientProtocol {
             activeAccountID = accounts.first?.id
         }
         await save()
+        return storeSnapshot()
+    }
+
+    func removeRoute(
+        accountID: UUID,
+        routeID: UUID
+    ) async throws -> JellyfinStoreSnapshot {
+        await ensureLoaded()
+        guard
+            let accountIndex = accounts.firstIndex(where: { $0.id == accountID }
+            )
+        else {
+            throw JellyfinClientError.accountNotFound
+        }
+
+        let account = accounts[accountIndex]
+        guard account.routes.contains(where: { $0.id == routeID }) else {
+            throw JellyfinClientError.routeNotFound
+        }
+
+        let updatedAccount = account.removingRoute(routeID)
+        if updatedAccount.routes.isEmpty {
+            accounts.remove(at: accountIndex)
+            lastAutoRouteProbeAtByAccountID.removeValue(forKey: accountID)
+            if activeAccountID == accountID {
+                activeAccountID = accounts.first?.id
+            }
+            await save()
+            return storeSnapshot()
+        }
+
+        accounts[accountIndex] = updatedAccount
+        lastAutoRouteProbeAtByAccountID.removeValue(forKey: accountID)
+        await save()
+
+        if updatedAccount.usesAutomaticRouteSelection {
+            return await reconcileAutomaticRoutes(
+                accountID: accountID,
+                force: true
+            )
+        }
+
         return storeSnapshot()
     }
 

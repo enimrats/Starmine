@@ -3,6 +3,7 @@ import XCTest
 
 actor MockJellyfinClient: JellyfinClientProtocol {
     let snapshotValue: JellyfinStoreSnapshot
+    let removeRouteSnapshotValue: JellyfinStoreSnapshot?
     let switchRouteSnapshotValue: JellyfinStoreSnapshot?
     let automaticRouteSnapshotValue: JellyfinStoreSnapshot?
     let routePrioritySnapshotValue: JellyfinStoreSnapshot?
@@ -30,6 +31,7 @@ actor MockJellyfinClient: JellyfinClientProtocol {
 
     init(
         snapshotValue: JellyfinStoreSnapshot = .init(accounts: [], activeAccountID: nil),
+        removeRouteSnapshotValue: JellyfinStoreSnapshot? = nil,
         switchRouteSnapshotValue: JellyfinStoreSnapshot? = nil,
         automaticRouteSnapshotValue: JellyfinStoreSnapshot? = nil,
         routePrioritySnapshotValue: JellyfinStoreSnapshot? = nil,
@@ -51,6 +53,7 @@ actor MockJellyfinClient: JellyfinClientProtocol {
         )? = nil
     ) {
         self.snapshotValue = snapshotValue
+        self.removeRouteSnapshotValue = removeRouteSnapshotValue
         self.switchRouteSnapshotValue = switchRouteSnapshotValue
         self.automaticRouteSnapshotValue = automaticRouteSnapshotValue
         self.routePrioritySnapshotValue = routePrioritySnapshotValue
@@ -83,6 +86,10 @@ actor MockJellyfinClient: JellyfinClientProtocol {
 
     func removeAccount(_ accountID: UUID) async throws -> JellyfinStoreSnapshot {
         snapshotValue
+    }
+
+    func removeRoute(accountID: UUID, routeID: UUID) async throws -> JellyfinStoreSnapshot {
+        removeRouteSnapshotValue ?? snapshotValue
     }
 
     func addRoute(accountID: UUID, serverURL: String, routeName: String?) async throws -> JellyfinStoreSnapshot {
@@ -474,6 +481,186 @@ final class JellyfinStoreTests: XCTestCase {
         XCTAssertEqual(store.selectedAccountID, remainingAccountID)
         XCTAssertEqual(store.selectedLibraryID, "movies")
         XCTAssertEqual(store.items.map(\.id), ["movie-1"])
+    }
+
+    func testRemoveRouteRemovesAccountWhenLastRouteDeleted() async throws {
+        let removedAccountID = UUID()
+        let remainingAccountID = UUID()
+        let removedRoute = JellyfinRoute(
+            id: UUID(),
+            name: "Primary",
+            url: "http://removed.example.com"
+        )
+        let removedAccount = JellyfinAccountProfile(
+            id: removedAccountID,
+            serverID: "server-1",
+            serverName: "Removed",
+            username: "alice",
+            userID: "user-1",
+            accessToken: "token-1",
+            routes: [removedRoute]
+        )
+        let remainingAccount = JellyfinAccountProfile(
+            id: remainingAccountID,
+            serverID: "server-2",
+            serverName: "Remaining",
+            username: "bob",
+            userID: "user-2",
+            accessToken: "token-2",
+            routes: [JellyfinRoute(name: "Default", url: "http://keep.example.com")],
+            lastSelectedLibraryID: "movies"
+        )
+        let client = MockJellyfinClient(
+            snapshotValue: JellyfinStoreSnapshot(
+                accounts: [remainingAccount],
+                activeAccountID: remainingAccountID
+            ),
+            removeRouteSnapshotValue: JellyfinStoreSnapshot(
+                accounts: [remainingAccount],
+                activeAccountID: remainingAccountID
+            ),
+            librariesByAccountID: [
+                remainingAccountID: [
+                    JellyfinLibrary(
+                        payload: [
+                            "Id": "movies",
+                            "Name": "Movies",
+                            "CollectionType": "movies",
+                        ]
+                    )
+                ]
+            ],
+            itemsByLibraryID: [
+                "movies": [
+                    JellyfinMediaItem(
+                        payload: [
+                            "Id": "movie-1",
+                            "Name": "Paprika",
+                            "Type": "Movie",
+                        ]
+                    )
+                ]
+            ]
+        )
+
+        let store = makeStore(client: client)
+        store.accounts = [removedAccount, remainingAccount]
+        store.selectedAccountID = removedAccountID
+        store.selectedLibraryID = "old-library"
+        store.items = [
+            JellyfinMediaItem(
+                payload: [
+                    "Id": "old-item",
+                    "Name": "Old Item",
+                    "Type": "Movie",
+                ]
+            )
+        ]
+
+        try await store.removeRoute(
+            accountID: removedAccountID,
+            routeID: removedRoute.id
+        )
+
+        XCTAssertEqual(store.selectedAccountID, remainingAccountID)
+        XCTAssertEqual(store.selectedLibraryID, "movies")
+        XCTAssertEqual(store.items.map(\.id), ["movie-1"])
+    }
+
+    func testRemoveRouteRefreshesContextsWhenActiveRouteChanges()
+        async throws
+    {
+        let accountID = UUID()
+        let oldRoute = JellyfinRoute(
+            id: UUID(),
+            name: "外网",
+            url: "https://wan.example.com",
+            priority: 0
+        )
+        let newRoute = JellyfinRoute(
+            id: UUID(),
+            name: "内网",
+            url: "http://lan.example.com",
+            priority: 1
+        )
+        let oldAccount = JellyfinAccountProfile(
+            id: accountID,
+            serverID: "server",
+            serverName: "Jellyfin",
+            username: "alice",
+            userID: "user",
+            accessToken: "token",
+            routes: [oldRoute, newRoute],
+            lastSuccessfulRouteID: oldRoute.id,
+            lastSelectedLibraryID: "tv"
+        )
+        let updatedAccount = oldAccount.removingRoute(oldRoute.id)
+        let library = JellyfinLibrary(
+            payload: [
+                "Id": "tv",
+                "Name": "TV",
+                "CollectionType": "tvshows",
+            ]
+        )
+        let refreshedItem = JellyfinMediaItem(
+            payload: [
+                "Id": "movie-1",
+                "Name": "Paprika",
+                "Type": "Movie",
+            ]
+        )
+        let refreshedResume = JellyfinHomeItem(
+            payload: [
+                "Id": "resume-1",
+                "Name": "Episode 1",
+                "Type": "Episode",
+                "SeriesName": "Frieren",
+                "SeriesId": "series-1",
+                "SeasonId": "season-1",
+                "IndexNumber": 1,
+                "ParentIndexNumber": 1,
+            ]
+        )
+        let client = MockJellyfinClient(
+            snapshotValue: JellyfinStoreSnapshot(
+                accounts: [updatedAccount],
+                activeAccountID: accountID
+            ),
+            removeRouteSnapshotValue: JellyfinStoreSnapshot(
+                accounts: [updatedAccount],
+                activeAccountID: accountID
+            ),
+            librariesByAccountID: [accountID: [library]],
+            itemsByLibraryID: ["tv": [refreshedItem]],
+            resumeItemsByAccountID: [accountID: [refreshedResume]]
+        )
+
+        let store = makeStore(client: client)
+        store.accounts = [oldAccount]
+        store.selectedAccountID = accountID
+        store.homeAccountID = accountID
+        store.selectedLibraryID = "tv"
+        store.items = [
+            JellyfinMediaItem(
+                payload: ["Id": "old-item", "Name": "Old", "Type": "Movie"]
+            )
+        ]
+        store.resumeItems = [
+            JellyfinHomeItem(
+                payload: [
+                    "Id": "old-resume",
+                    "Name": "Old Episode",
+                    "Type": "Episode",
+                    "SeriesName": "Old",
+                ]
+            )
+        ]
+
+        try await store.removeRoute(accountID: accountID, routeID: oldRoute.id)
+
+        XCTAssertEqual(store.activeRoute?.id, newRoute.id)
+        XCTAssertEqual(store.items.map(\.id), ["movie-1"])
+        XCTAssertEqual(store.resumeItems.map(\.id), ["resume-1"])
     }
 
     func testRefreshHomeLoadsShelvesForActiveAccount() async throws {

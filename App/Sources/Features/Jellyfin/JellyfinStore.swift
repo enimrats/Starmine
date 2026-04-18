@@ -409,6 +409,46 @@ final class JellyfinStore: ObservableObject {
         await syncOfflineEntriesIfPossible()
     }
 
+    func removeRoute(accountID: UUID, routeID: UUID) async throws {
+        let removedSelectedAccount = selectedAccountID == accountID
+        let removedHomeAccount = homeAccountID == accountID
+        let previousRouteID = activeRouteID(forAccountID: accountID)
+        let snapshot = try await client.removeRoute(
+            accountID: accountID,
+            routeID: routeID
+        )
+        applySnapshot(snapshot)
+
+        let accountStillExists = accounts.contains(where: { $0.id == accountID })
+        if !accountStillExists {
+            guard removedSelectedAccount || removedHomeAccount else { return }
+
+            if removedSelectedAccount {
+                clearBrowseState(clearLibraries: selectedAccountID == nil)
+                if selectedAccountID != nil {
+                    try await refreshLibrary()
+                }
+            }
+            if homeAccountID != nil {
+                try await refreshHome()
+            } else {
+                clearHomeState()
+            }
+            await syncOfflineEntriesIfPossible()
+            return
+        }
+
+        guard activeRouteID(forAccountID: accountID) != previousRouteID else {
+            return
+        }
+
+        try await refreshContexts(
+            for: accountID,
+            reconcileRoutes: false
+        )
+        await syncOfflineEntriesIfPossible()
+    }
+
     func refreshHome(reconcilingRoutes: Bool = true) async throws {
         guard let accountID = homeAccountID else {
             clearHomeState()

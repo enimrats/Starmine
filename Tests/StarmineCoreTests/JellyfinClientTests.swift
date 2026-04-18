@@ -439,6 +439,169 @@ final class JellyfinClientTests: XCTestCase {
         )
     }
 
+    func testRemoveRouteDeletesAccountWhenLastRouteRemoved() async throws {
+        await JellyfinURLProtocolState.shared.configure { request in
+            guard let url = request.url else {
+                throw URLError(.badURL)
+            }
+
+            switch (url.host, url.path) {
+            case ("primary.example.com", "/System/Info/Public"):
+                return try Self.jsonResponse(
+                    url: url,
+                    body: [
+                        "Id": "server-1",
+                        "ServerName": "Test Jellyfin",
+                    ]
+                )
+
+            case ("primary.example.com", "/Users/AuthenticateByName"):
+                return try Self.jsonResponse(
+                    url: url,
+                    body: [
+                        "AccessToken": "token-1",
+                        "User": ["Id": "user-1"],
+                    ]
+                )
+
+            default:
+                throw URLError(.unsupportedURL)
+            }
+        }
+        defer {
+            Task {
+                await JellyfinURLProtocolState.shared.reset()
+            }
+        }
+
+        let client = makeClient()
+        let connectSnapshot = try await client.connect(
+            serverURL: "https://primary.example.com",
+            username: "alice",
+            password: "secret",
+            routeName: "Primary"
+        )
+        let accountID = try XCTUnwrap(connectSnapshot.activeAccountID)
+        let routeID = try XCTUnwrap(
+            connectSnapshot.accounts.first(where: { $0.id == accountID })?
+                .routes.first?.id
+        )
+
+        let updatedSnapshot = try await client.removeRoute(
+            accountID: accountID,
+            routeID: routeID
+        )
+
+        XCTAssertTrue(updatedSnapshot.accounts.isEmpty)
+        XCTAssertNil(updatedSnapshot.activeAccountID)
+
+        let reloadedClient = makeClient()
+        let reloadedSnapshot = await reloadedClient.snapshot()
+        XCTAssertTrue(reloadedSnapshot.accounts.isEmpty)
+        XCTAssertNil(reloadedSnapshot.activeAccountID)
+    }
+
+    func testRemoveRouteClearsManualSelectionWhenRemovingManualRoute()
+        async throws
+    {
+        await JellyfinURLProtocolState.shared.configure { request in
+            guard let url = request.url else {
+                throw URLError(.badURL)
+            }
+
+            switch (url.host, url.path) {
+            case ("primary.example.com", "/System/Info/Public"),
+                ("backup.example.com", "/System/Info/Public"):
+                return try Self.jsonResponse(
+                    url: url,
+                    body: [
+                        "Id": "server-1",
+                        "ServerName": "Test Jellyfin",
+                    ]
+                )
+
+            case ("primary.example.com", "/Users/AuthenticateByName"):
+                return try Self.jsonResponse(
+                    url: url,
+                    body: [
+                        "AccessToken": "token-1",
+                        "User": ["Id": "user-1"],
+                    ]
+                )
+
+            case ("backup.example.com", "/System/Info"):
+                return try Self.jsonResponse(
+                    url: url,
+                    body: [
+                        "Id": "server-1",
+                        "ServerName": "Test Jellyfin",
+                    ]
+                )
+
+            default:
+                throw URLError(.unsupportedURL)
+            }
+        }
+        defer {
+            Task {
+                await JellyfinURLProtocolState.shared.reset()
+            }
+        }
+
+        let client = makeClient()
+        let connectSnapshot = try await client.connect(
+            serverURL: "https://primary.example.com",
+            username: "alice",
+            password: "secret",
+            routeName: "Primary"
+        )
+        let accountID = try XCTUnwrap(connectSnapshot.activeAccountID)
+        let routeSnapshot = try await client.addRoute(
+            accountID: accountID,
+            serverURL: "https://backup.example.com",
+            routeName: "Backup"
+        )
+        let account = try XCTUnwrap(
+            routeSnapshot.accounts.first(where: { $0.id == accountID })
+        )
+        let primaryRouteID = try XCTUnwrap(
+            account.routes.first(where: {
+                $0.normalizedURL == "https://primary.example.com"
+            })?.id
+        )
+        let backupRouteID = try XCTUnwrap(
+            account.routes.first(where: {
+                $0.normalizedURL == "https://backup.example.com"
+            })?.id
+        )
+
+        _ = try await client.switchRoute(
+            accountID: accountID,
+            routeID: backupRouteID
+        )
+
+        let updatedSnapshot = try await client.removeRoute(
+            accountID: accountID,
+            routeID: backupRouteID
+        )
+        let updatedAccount = try XCTUnwrap(
+            updatedSnapshot.accounts.first(where: { $0.id == accountID })
+        )
+
+        XCTAssertNil(updatedAccount.manualRouteID)
+        XCTAssertEqual(updatedAccount.routes.map(\.id), [primaryRouteID])
+        XCTAssertEqual(updatedAccount.activeRoute?.id, primaryRouteID)
+
+        let reloadedClient = makeClient()
+        let reloadedSnapshot = await reloadedClient.snapshot()
+        let reloadedAccount = try XCTUnwrap(
+            reloadedSnapshot.accounts.first(where: { $0.id == accountID })
+        )
+        XCTAssertNil(reloadedAccount.manualRouteID)
+        XCTAssertEqual(reloadedAccount.routes.map(\.id), [primaryRouteID])
+        XCTAssertEqual(reloadedAccount.activeRoute?.id, primaryRouteID)
+    }
+
     private func makeClient() -> JellyfinClient {
         let configuration = URLSessionConfiguration.ephemeral
         configuration.protocolClasses = [JellyfinURLProtocol.self]
