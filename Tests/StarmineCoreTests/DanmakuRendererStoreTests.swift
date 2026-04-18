@@ -31,6 +31,41 @@ final class DanmakuRendererStoreTests: XCTestCase {
         XCTAssertEqual(store.activeItems.map(\.comment.text), ["first"])
     }
 
+    func testSeekRebuildKeepsEarlierInFlightScrollDanmakuVisible() {
+        let store = DanmakuRendererStore()
+        store.load([
+            DanmakuComment(time: 5.0, text: "before-seek", presentation: .scroll, color: .white),
+            DanmakuComment(time: 10.0, text: "after-seek", presentation: .scroll, color: .white),
+        ])
+
+        let viewport = CGSize(width: 1280, height: 720)
+        store.sync(playbackTime: 12.0, viewportSize: viewport)
+        store.sync(playbackTime: 9.0, viewportSize: viewport)
+
+        guard let item = store.activeItems.first(where: { $0.comment.text == "before-seek" }) else {
+            return XCTFail("expected pre-seek danmaku to remain visible after seek")
+        }
+
+        XCTAssertEqual(item.startTime, 5.0, accuracy: 0.001)
+        XCTAssertGreaterThan(item.endTime, 9.0)
+    }
+
+    func testSyncUsesOriginalCommentTimeWhenFrameStepSkipsAhead() {
+        let store = DanmakuRendererStore()
+        store.load([
+            DanmakuComment(time: 1.0, text: "missed-frame", presentation: .scroll, color: .white),
+        ])
+
+        let viewport = CGSize(width: 1280, height: 720)
+        store.sync(playbackTime: 2.0, viewportSize: viewport)
+
+        guard let item = store.activeItems.first else {
+            return XCTFail("expected active danmaku item")
+        }
+
+        XCTAssertEqual(item.startTime, 1.0, accuracy: 0.001)
+    }
+
     func testScrollPointMovesLeftAsTimeAdvances() {
         let store = DanmakuRendererStore()
         store.load([

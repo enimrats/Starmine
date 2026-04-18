@@ -10,6 +10,8 @@ import Foundation
 
 @MainActor
 final class DanmakuRendererStore {
+    private static let resetReplayWindow: Double = 12
+
     private(set) var activeItems: [ActiveDanmaku] = []
 
     private(set) var configuration: DanmakuRenderConfiguration
@@ -58,7 +60,24 @@ final class DanmakuRendererStore {
         self.configuration = clampedConfiguration
         lastLayoutSignature = nil
         if lastPlaybackTime >= 0 {
-            reset(to: lastPlaybackTime)
+            if lastViewportSize.width > 0, lastViewportSize.height > 0 {
+                let lanePlan = resolvedLanePlan(
+                    for: lastViewportSize,
+                    metrics: lastMetrics
+                )
+                configureLanes(using: lanePlan)
+                reset(
+                    to: lastPlaybackTime,
+                    viewportSize: lastViewportSize,
+                    lanePlan: lanePlan,
+                    metrics: lastMetrics
+                )
+            } else {
+                activeItems = []
+                nextIndex = comments.partitioningIndex(where: {
+                    $0.time >= lastPlaybackTime
+                })
+            }
         } else if !activeItems.isEmpty {
             activeItems = []
         }
@@ -87,6 +106,8 @@ final class DanmakuRendererStore {
             for: viewportSize,
             metrics: metrics
         )
+        configureLanes(using: lanePlan)
+
         var didChange = false
         if shouldReset(
             for: playbackTime,
@@ -97,11 +118,14 @@ final class DanmakuRendererStore {
                 configuration: configuration
             )
         ) {
-            reset(to: playbackTime)
+            reset(
+                to: playbackTime,
+                viewportSize: viewportSize,
+                lanePlan: lanePlan,
+                metrics: metrics
+            )
             didChange = true
         }
-
-        configureLanes(using: lanePlan)
         let previousCount = activeItems.count
         activeItems.removeAll(where: { $0.endTime <= playbackTime })
         didChange = didChange || activeItems.count != previousCount
@@ -111,9 +135,10 @@ final class DanmakuRendererStore {
         {
             spawn(
                 comments[nextIndex],
-                playbackTime: playbackTime,
+                scheduledTime: comments[nextIndex].time,
                 viewportSize: viewportSize,
-                lanePlan: lanePlan
+                lanePlan: lanePlan,
+                metrics: metrics
             )
             nextIndex += 1
             didChange = true
@@ -178,17 +203,57 @@ final class DanmakuRendererStore {
         return abs(playbackTime - lastPlaybackTime) > 8
     }
 
-    private func reset(to playbackTime: Double) {
-        activeItems = []
-        // Back up a small window so newly visible comments are respawned after a seek or
-        // when the renderer first syncs to a non-zero playback time.
-        nextIndex = comments.partitioningIndex(where: {
-            $0.time >= max(0, playbackTime - 12)
+    func commentsToPreheat(
+        from playbackTime: Double,
+        lookAhead: Double = 3
+    ) -> ArraySlice<DanmakuComment> {
+        guard !comments.isEmpty, lookAhead > 0 else { return [] }
+
+        let lowerBound = max(0, playbackTime)
+        let upperBound = lowerBound + lookAhead
+        let startIndex = comments.partitioningIndex(where: {
+            $0.time >= lowerBound
         })
+        let endIndex = comments.partitioningIndex(where: {
+            $0.time > upperBound
+        })
+        return comments[startIndex..<endIndex]
+    }
+
+    private func reset(
+        to playbackTime: Double,
+        viewportSize: CGSize,
+        lanePlan: DanmakuLanePlan,
+        metrics: DanmakuLayoutMetrics
+    ) {
+        let replayStartTime = max(0, playbackTime - Self.resetReplayWindow)
+        let replayStartIndex = comments.partitioningIndex(where: {
+            $0.time >= replayStartTime
+        })
+
+        activeItems = []
+        nextIndex = replayStartIndex
         lastPlaybackTime = playbackTime
-        scrollLanes = scrollLanes.map { _ in playbackTime }
-        topLanes = topLanes.map { _ in playbackTime }
-        bottomLanes = bottomLanes.map { _ in playbackTime }
+        scrollLanes = scrollLanes.map { _ in replayStartTime }
+        topLanes = topLanes.map { _ in replayStartTime }
+        bottomLanes = bottomLanes.map { _ in replayStartTime }
+
+        while nextIndex < comments.count,
+            comments[nextIndex].time <= playbackTime
+        {
+            let scheduledTime = comments[nextIndex].time
+            activeItems.removeAll(where: { $0.endTime <= scheduledTime })
+            spawn(
+                comments[nextIndex],
+                scheduledTime: scheduledTime,
+                viewportSize: viewportSize,
+                lanePlan: lanePlan,
+                metrics: metrics
+            )
+            nextIndex += 1
+        }
+
+        activeItems.removeAll(where: { $0.endTime <= playbackTime })
     }
 
     private func configureLanes(using lanePlan: DanmakuLanePlan) {
@@ -214,9 +279,10 @@ final class DanmakuRendererStore {
 
     private func spawn(
         _ comment: DanmakuComment,
-        playbackTime: Double,
+        scheduledTime: Double,
         viewportSize: CGSize,
-        lanePlan: DanmakuLanePlan
+        lanePlan: DanmakuLanePlan,
+        metrics: DanmakuLayoutMetrics
     ) {
         let fontSize = lanePlan.fontSize
         let renderWidth = resolvedRenderWidth(
@@ -238,8 +304,9 @@ final class DanmakuRendererStore {
             let reservation = bestScrollLane(
                 widthEstimate: widthEstimate,
                 duration: duration,
-                playbackTime: playbackTime,
-                viewportSize: viewportSize
+                scheduledTime: scheduledTime,
+                viewportSize: viewportSize,
+                metrics: metrics
             )
             let startTime = reservation.availableTime
             activeItems.append(
@@ -257,15 +324,15 @@ final class DanmakuRendererStore {
             )
         case .top:
             let duration = 4.2
-            let lane = bestLane(in: topLanes, at: playbackTime)
-            topLanes[lane] = playbackTime + duration
+            let lane = bestLane(in: topLanes, at: scheduledTime)
+            topLanes[lane] = scheduledTime + duration
             activeItems.append(
                 ActiveDanmaku(
                     comment: comment,
                     lane: lane,
                     region: .top,
-                    startTime: playbackTime,
-                    endTime: playbackTime + duration,
+                    startTime: scheduledTime,
+                    endTime: scheduledTime + duration,
                     duration: duration,
                     widthEstimate: widthEstimate,
                     renderWidth: renderWidth,
@@ -274,15 +341,15 @@ final class DanmakuRendererStore {
             )
         case .bottom:
             let duration = 4.2
-            let lane = bestLane(in: bottomLanes, at: playbackTime)
-            bottomLanes[lane] = playbackTime + duration
+            let lane = bestLane(in: bottomLanes, at: scheduledTime)
+            bottomLanes[lane] = scheduledTime + duration
             activeItems.append(
                 ActiveDanmaku(
                     comment: comment,
                     lane: lane,
                     region: .bottom,
-                    startTime: playbackTime,
-                    endTime: playbackTime + duration,
+                    startTime: scheduledTime,
+                    endTime: scheduledTime + duration,
                     duration: duration,
                     widthEstimate: widthEstimate,
                     renderWidth: renderWidth,
@@ -303,11 +370,12 @@ final class DanmakuRendererStore {
     private func bestScrollLane(
         widthEstimate: CGFloat,
         duration: Double,
-        playbackTime: Double,
-        viewportSize: CGSize
+        scheduledTime: Double,
+        viewportSize: CGSize,
+        metrics: DanmakuLayoutMetrics
     ) -> (lane: Int, availableTime: Double) {
         guard !scrollLanes.isEmpty else {
-            return (0, playbackTime)
+            return (0, scheduledTime)
         }
 
         return scrollLanes.indices
@@ -318,8 +386,9 @@ final class DanmakuRendererStore {
                         lane: lane,
                         candidateWidthEstimate: widthEstimate,
                         candidateDuration: duration,
-                        playbackTime: playbackTime,
-                        viewportSize: viewportSize
+                        scheduledTime: scheduledTime,
+                        viewportSize: viewportSize,
+                        metrics: metrics
                     )
                 )
             }
@@ -328,25 +397,25 @@ final class DanmakuRendererStore {
                     return lhs.lane < rhs.lane
                 }
                 return lhs.availableTime < rhs.availableTime
-            } ?? (0, playbackTime)
+            } ?? (0, scheduledTime)
     }
 
     private func laneAvailabilityTime(
         lane: Int,
         candidateWidthEstimate: CGFloat,
         candidateDuration: Double,
-        playbackTime: Double,
+        scheduledTime: Double,
         viewportSize: CGSize,
-        metrics: DanmakuLayoutMetrics = .playbackChrome
+        metrics: DanmakuLayoutMetrics
     ) -> Double {
         guard let blocker = latestScrollItem(in: lane) else {
-            return playbackTime
+            return scheduledTime
         }
 
-        let referenceTime = max(playbackTime, blocker.startTime)
+        let referenceTime = max(scheduledTime, blocker.startTime)
         let blockerRemaining = max(0, blocker.endTime - referenceTime)
         guard blockerRemaining > 0 else {
-            return playbackTime
+            return scheduledTime
         }
 
         let blockerSpeed = scrollSpeed(

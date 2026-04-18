@@ -298,13 +298,25 @@ struct DanmakuLayoutMetrics: Hashable {
     let horizontalInset: CGFloat
 
     static let playbackChrome = DanmakuLayoutMetrics(
-        topInset: 26,
+        topInset: {
+            #if os(macOS)
+            return 56
+            #else
+            return 26
+            #endif
+        }(),
         bottomInset: 118,
         horizontalInset: 18
     )
 
     static let immersivePlayback = DanmakuLayoutMetrics(
-        topInset: 26,
+        topInset: {
+            #if os(macOS)
+            return 56
+            #else
+            return 26
+            #endif
+        }(),
         bottomInset: 118,
         horizontalInset: 0
     )
