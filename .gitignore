@@ -34,11 +34,9 @@ Build/
 **/.swiftpm/
 
 # Downloaded / generated vendor binaries
-Vendor/downloads/
-Vendor/xcframeworks/
-Vendor/MPVKit-*/
-Vendor/MPVKit-0.41.0/dist/
-Vendor/MPVKit-0.41.0/release/
+Vendor/
+External/
+Samples/
 
 # Generic compiled objects and temp files
 *.o
@@ -49,6 +47,10 @@ Vendor/MPVKit-0.41.0/release/
 *.dll
 *.exe
 *.out
+target/
 *.swp
 *.swo
 *~
+
+# Others
+plan/
