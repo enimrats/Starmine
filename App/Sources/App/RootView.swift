@@ -96,36 +96,6 @@ struct RootView: View {
                 }
         #else
             rootContent
-                .fileImporter(
-                    isPresented: $importerPresented,
-                    allowedContentTypes: videoImportTypes,
-                    allowsMultipleSelection: false
-                ) { result in
-                    switch result {
-                    case let .success(urls):
-                        guard let url = urls.first else { return }
-                        coordinator.openVideo(url: url)
-                    case let .failure(error):
-                        coordinator.errorState = AppErrorState(
-                            message: error.localizedDescription
-                        )
-                    }
-                }
-                .fileImporter(
-                    isPresented: $subtitleImporterPresented,
-                    allowedContentTypes: subtitleImportTypes,
-                    allowsMultipleSelection: false
-                ) { result in
-                    switch result {
-                    case let .success(urls):
-                        guard let url = urls.first else { return }
-                        coordinator.addExternalSubtitle(url: url)
-                    case let .failure(error):
-                        coordinator.errorState = AppErrorState(
-                            message: error.localizedDescription
-                        )
-                    }
-                }
         #endif
     }
 
@@ -434,6 +404,12 @@ struct RootView: View {
                     }
                     .navigationTitle("主页")
                 }
+                .fileImporter(
+                    isPresented: activeVideoImporterBinding(for: .home),
+                    allowedContentTypes: videoImportTypes,
+                    allowsMultipleSelection: false,
+                    onCompletion: handleVideoImportResult
+                )
                 .tabItem {
                     Label("主页", systemImage: "house.fill")
                 }
@@ -449,6 +425,12 @@ struct RootView: View {
                     )
                     .navigationTitle("文件")
                 }
+                .fileImporter(
+                    isPresented: activeVideoImporterBinding(for: .files),
+                    allowedContentTypes: videoImportTypes,
+                    allowsMultipleSelection: false,
+                    onCompletion: handleVideoImportResult
+                )
                 .tabItem {
                     Label("文件", systemImage: "folder.fill")
                 }
@@ -468,6 +450,18 @@ struct RootView: View {
                 NavigationStack {
                     mobilePlayerScreen
                 }
+                .fileImporter(
+                    isPresented: activeVideoImporterBinding(for: .player),
+                    allowedContentTypes: videoImportTypes,
+                    allowsMultipleSelection: false,
+                    onCompletion: handleVideoImportResult
+                )
+                .fileImporter(
+                    isPresented: activeSubtitleImporterBinding(for: .player),
+                    allowedContentTypes: subtitleImportTypes,
+                    allowsMultipleSelection: false,
+                    onCompletion: handleSubtitleImportResult
+                )
                 .tabItem {
                     Label(
                         "播放器",
@@ -509,6 +503,42 @@ struct RootView: View {
                     }
                 }
             }
+        }
+
+        private func activeVideoImporterBinding(for tab: MobileRootTab)
+            -> Binding<Bool>
+        {
+            Binding(
+                get: {
+                    importerPresented && mobileTab == tab
+                },
+                set: { newValue in
+                    if newValue {
+                        guard mobileTab == tab else { return }
+                        importerPresented = true
+                    } else {
+                        importerPresented = false
+                    }
+                }
+            )
+        }
+
+        private func activeSubtitleImporterBinding(for tab: MobileRootTab)
+            -> Binding<Bool>
+        {
+            Binding(
+                get: {
+                    subtitleImporterPresented && mobileTab == tab
+                },
+                set: { newValue in
+                    if newValue {
+                        guard mobileTab == tab else { return }
+                        subtitleImporterPresented = true
+                    } else {
+                        subtitleImporterPresented = false
+                    }
+                }
+            )
         }
 
         private var mobilePlayerScreen: some View {
@@ -1011,6 +1041,30 @@ struct RootView: View {
         }
         coordinator.switchJellyfinAccount(homeAccountID)
         workspaceSection = .library(homeAccountID)
+    }
+
+    private func handleVideoImportResult(_ result: Result<[URL], Error>) {
+        switch result {
+        case let .success(urls):
+            guard let url = urls.first else { return }
+            coordinator.openVideo(url: url)
+        case let .failure(error):
+            coordinator.errorState = AppErrorState(
+                message: error.localizedDescription
+            )
+        }
+    }
+
+    private func handleSubtitleImportResult(_ result: Result<[URL], Error>) {
+        switch result {
+        case let .success(urls):
+            guard let url = urls.first else { return }
+            coordinator.addExternalSubtitle(url: url)
+        case let .failure(error):
+            coordinator.errorState = AppErrorState(
+                message: error.localizedDescription
+            )
+        }
     }
 
     private func selectHomeItem(_ item: JellyfinHomeItem) {
