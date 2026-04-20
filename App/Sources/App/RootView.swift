@@ -1380,18 +1380,7 @@ struct RootView: View {
 
             Spacer(minLength: 12)
 
-            trackMenu(
-                title: playback.selectedAudioTrack?.title ?? "音轨",
-                systemImage: "music.note",
-                tracks: playback.audioTracks,
-                selectedID: playback.selectedAudioTrackID,
-                includeOffOption: false
-            ) { id in
-                if let id {
-                    notePlaybackInteraction()
-                    coordinator.selectAudioTrack(id: id)
-                }
-            }
+            audioTrackMenu
 
             subtitleTrackMenu
 
@@ -1607,17 +1596,7 @@ struct RootView: View {
 
                 Section("音轨与字幕") {
                     Menu {
-                        ForEach(playback.audioTracks) { track in
-                            trackMenuButton(
-                                title: track.title,
-                                detail: track.detail,
-                                isSelected: playback.selectedAudioTrackID
-                                    == track.mpvID
-                            ) {
-                                notePlaybackInteraction()
-                                coordinator.selectAudioTrack(id: track.mpvID)
-                            }
-                        }
+                        audioTrackMenuContent
                     } label: {
                         Label("音轨", systemImage: "music.note")
                     }
@@ -1780,6 +1759,47 @@ struct RootView: View {
         }
     }
 
+    private var audioTrackMenu: some View {
+        Menu {
+            audioTrackMenuContent
+        } label: {
+            MenuChip(
+                title: playback.selectedAudioTrack?.title ?? "音轨",
+                systemImage: "music.note"
+            )
+            .opacity(playback.audioTracks.isEmpty ? 0.55 : 1)
+        }
+        .buttonStyle(.plain)
+        .disabled(playback.audioTracks.isEmpty)
+    }
+
+    @ViewBuilder
+    private var audioTrackMenuContent: some View {
+        if playback.canEnableSpatialAudio {
+            Section("空间音频") {
+                trackMenuButton(
+                    title: "空间音频",
+                    detail: "E-AC-3 JOC -> eac3joc + coreaudio_spatial714",
+                    isSelected: playback.spatialAudioEnabled
+                ) {
+                    notePlaybackInteraction()
+                    playback.setSpatialAudioEnabled(!playback.spatialAudioEnabled)
+                }
+            }
+        }
+
+        ForEach(playback.audioTracks) { track in
+            trackMenuButton(
+                title: track.title,
+                detail: track.detail,
+                isSelected: playback.selectedAudioTrackID == track.mpvID
+            ) {
+                notePlaybackInteraction()
+                coordinator.selectAudioTrack(id: track.mpvID)
+            }
+        }
+    }
+
     private var subtitleTrackMenu: some View {
         Menu {
             Button {
@@ -1817,42 +1837,6 @@ struct RootView: View {
             )
         }
         .buttonStyle(.plain)
-    }
-
-    private func trackMenu(
-        title: String,
-        systemImage: String,
-        tracks: [MediaTrackOption],
-        selectedID: Int64?,
-        includeOffOption: Bool,
-        onSelect: @escaping (Int64?) -> Void
-    ) -> some View {
-        Menu {
-            if includeOffOption {
-                trackMenuButton(
-                    title: "关闭字幕",
-                    detail: "",
-                    isSelected: selectedID == nil
-                ) {
-                    onSelect(nil)
-                }
-            }
-
-            ForEach(tracks) { track in
-                trackMenuButton(
-                    title: track.title,
-                    detail: track.detail,
-                    isSelected: selectedID == track.mpvID
-                ) {
-                    onSelect(track.mpvID)
-                }
-            }
-        } label: {
-            MenuChip(title: title, systemImage: systemImage)
-                .opacity(tracks.isEmpty && !includeOffOption ? 0.55 : 1)
-        }
-        .buttonStyle(.plain)
-        .disabled(tracks.isEmpty && !includeOffOption)
     }
 
     private func trackMenuButton(

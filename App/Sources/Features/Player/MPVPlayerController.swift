@@ -1,7 +1,7 @@
 import CoreGraphics
 import CoreImage
 import Foundation
-import Libmpv
+import MPVKit
 
 private struct PendingExternalSubtitle {
     var url: URL
@@ -50,6 +50,11 @@ final class MPVPlayerController: @unchecked Sendable {
     private var lastTrackState = PlayerTrackState()
     private var needsTrackRefresh = true
     private var desiredPlaybackRate = 1.0
+    private var desiredSpatialAudioEnabled = false
+    private var configuredAudioDecoder: String?
+    private var configuredAudioOutput: String?
+    private var defaultAudioDecoder: String?
+    private var defaultAudioOutput: String?
 
     deinit {
         queue.sync {
@@ -151,6 +156,14 @@ final class MPVPlayerController: @unchecked Sendable {
         }
     }
 
+    func setSpatialAudioEnabled(_ enabled: Bool) {
+        queue.async {
+            self.desiredSpatialAudioEnabled = enabled
+            guard self.initialized else { return }
+            self.applyAudioConfigurationLocked(reloadCurrentTrack: true)
+        }
+    }
+
     func selectSubtitleTrack(id: Int64?) {
         queue.async {
             self.setTrackSelectionLocked(name: "sid", value: id)
@@ -246,7 +259,9 @@ final class MPVPlayerController: @unchecked Sendable {
         }
 
         initialized = true
+        captureDefaultAudioConfigurationLocked()
         setDoublePropertyLocked(name: "speed", value: desiredPlaybackRate)
+        applyAudioConfigurationLocked(reloadCurrentTrack: false)
         mpv_observe_property(context, 0, "time-pos", MPV_FORMAT_DOUBLE)
         mpv_observe_property(context, 0, "duration", MPV_FORMAT_DOUBLE)
         mpv_observe_property(context, 0, "pause", MPV_FORMAT_FLAG)
@@ -306,6 +321,7 @@ final class MPVPlayerController: @unchecked Sendable {
     }
 
     private func loadLocked(_ url: URL) {
+        applyAudioConfigurationLocked(reloadCurrentTrack: false)
         let arguments = [url.absoluteString, "replace"]
         commandLocked("loadfile", arguments: arguments)
     }
@@ -464,6 +480,12 @@ final class MPVPlayerController: @unchecked Sendable {
         mpv_set_property(mpv, name, MPV_FORMAT_DOUBLE, &mutable)
     }
 
+    @discardableResult
+    private func setStringPropertyLocked(name: String, value: String) -> Int32 {
+        guard let mpv else { return Int32(MPV_ERROR_UNINITIALIZED.rawValue) }
+        return mpv_set_property_string(mpv, name, value)
+    }
+
     private func setTrackSelectionLocked(name: String, value: Int64?) {
         guard let mpv else { return }
         guard let value else {
@@ -511,6 +533,14 @@ final class MPVPlayerController: @unchecked Sendable {
                 .trimmingCharacters(in: .whitespacesAndNewlines)
             let codec = stringPropertyLocked(name: "\(base)/codec")?
                 .trimmingCharacters(in: .whitespacesAndNewlines)
+            let codecDescription = stringPropertyLocked(
+                name: "\(base)/codec-desc"
+            )?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            let codecProfile = stringPropertyLocked(
+                name: "\(base)/codec-profile"
+            )?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
             let isExternal = flagPropertyLocked(name: "\(base)/external")
             let isDefault = flagPropertyLocked(name: "\(base)/default")
             let isForced = flagPropertyLocked(name: "\(base)/forced")
@@ -544,7 +574,10 @@ final class MPVPlayerController: @unchecked Sendable {
                 mpvID: trackID,
                 title: resolvedTitle,
                 detail: detail,
-                isExternal: isExternal
+                isExternal: isExternal,
+                codec: codec,
+                codecDescription: codecDescription,
+                codecProfile: codecProfile
             )
 
             switch type {
@@ -610,6 +643,118 @@ final class MPVPlayerController: @unchecked Sendable {
         initialized = false
         lastTrackState = PlayerTrackState()
         needsTrackRefresh = true
+        configuredAudioDecoder = nil
+        configuredAudioOutput = nil
+        defaultAudioDecoder = nil
+        defaultAudioOutput = nil
+    }
+
+    private func applyAudioConfigurationLocked(reloadCurrentTrack: Bool) {
+        let desiredAudioDecoder =
+            desiredSpatialAudioEnabled
+            ? "eac3joc" : (resolvedDefaultAudioDecoderLocked())
+        let desiredAudioOutput =
+            desiredSpatialAudioEnabled
+            ? "coreaudio_spatial714"
+            : (resolvedDefaultAudioOutputLocked())
+
+        let configurationChanged =
+            configuredAudioDecoder != desiredAudioDecoder
+            || configuredAudioOutput != desiredAudioOutput
+        guard configurationChanged else { return }
+
+        let adStatus = setStringPropertyLocked(
+            name: "ad",
+            value: desiredAudioDecoder
+        )
+        if adStatus < 0 {
+            logSetPropertyFailureLocked(
+                name: "ad",
+                value: desiredAudioDecoder,
+                status: adStatus
+            )
+        }
+
+        let aoStatus = setStringPropertyLocked(
+            name: "ao",
+            value: desiredAudioOutput
+        )
+        if aoStatus < 0 {
+            logSetPropertyFailureLocked(
+                name: "ao",
+                value: desiredAudioOutput,
+                status: aoStatus
+            )
+        }
+
+        configuredAudioDecoder = desiredAudioDecoder
+        configuredAudioOutput = desiredAudioOutput
+
+        guard reloadCurrentTrack, stringPropertyLocked(name: "path") != nil else {
+            return
+        }
+
+        let reloadStatus = commandStatusLocked("audio-reload", arguments: [])
+        if reloadStatus < 0 {
+            log(
+                "audio-reload failed: \(String(cString: mpv_error_string(reloadStatus)))"
+            )
+            return
+        }
+        needsTrackRefresh = true
+    }
+
+    private func logSetPropertyFailureLocked(
+        name: String,
+        value: String,
+        status: Int32
+    ) {
+        log(
+            "failed to set \(name)=\(value): \(String(cString: mpv_error_string(status)))"
+        )
+    }
+
+    private func captureDefaultAudioConfigurationLocked() {
+        if defaultAudioDecoder == nil {
+            defaultAudioDecoder = stringPropertyLocked(name: "ad")
+        }
+        if defaultAudioOutput == nil {
+            defaultAudioOutput = stringPropertyLocked(name: "ao")
+        }
+    }
+
+    private func resolvedDefaultAudioDecoderLocked() -> String {
+        guard let defaultAudioDecoder else { return "" }
+        let normalizedDefault =
+            defaultAudioDecoder.trimmingCharacters(
+                in: .whitespacesAndNewlines
+            )
+        guard !normalizedDefault.isEmpty else { return "" }
+        guard normalizedDefault.caseInsensitiveCompare("auto") != .orderedSame
+        else {
+            return ""
+        }
+        return normalizedDefault
+    }
+
+    private func resolvedDefaultAudioOutputLocked() -> String {
+        if let defaultAudioOutput {
+            let normalizedDefault =
+                defaultAudioOutput.trimmingCharacters(
+                    in: .whitespacesAndNewlines
+                )
+            if !normalizedDefault.isEmpty,
+                normalizedDefault.caseInsensitiveCompare("auto")
+                    != .orderedSame
+            {
+                return normalizedDefault
+            }
+        }
+        #if os(macOS)
+            return "coreaudio"
+        #else
+            return "audiounit"
+        #endif
     }
 
     private func log(_ message: String) {

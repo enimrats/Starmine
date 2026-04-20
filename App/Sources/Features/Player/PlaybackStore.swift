@@ -18,6 +18,7 @@ final class PlaybackStore: ObservableObject {
     @Published var subtitleTracks: [MediaTrackOption] = []
     @Published var selectedAudioTrackID: Int64?
     @Published var selectedSubtitleTrackID: Int64?
+    @Published var spatialAudioEnabled = false
     @Published var isPlayingRemote = false
     @Published var canPlayPreviousEpisode = false
     @Published var canPlayNextEpisode = false
@@ -75,6 +76,7 @@ final class PlaybackStore: ObservableObject {
             self?.subtitleTracks = trackState.subtitleTracks
             self?.selectedAudioTrackID = trackState.selectedAudioID
             self?.selectedSubtitleTrackID = trackState.selectedSubtitleID
+            self?.reconcileSpatialAudioState()
             self?.refreshSystemMediaState()
         }
         systemMediaController.onPlay = { [weak self] in
@@ -118,6 +120,10 @@ final class PlaybackStore: ObservableObject {
 
     var selectedSubtitleTrack: MediaTrackOption? {
         subtitleTracks.first(where: { $0.mpvID == selectedSubtitleTrackID })
+    }
+
+    var canEnableSpatialAudio: Bool {
+        selectedAudioTrack?.isEAC3JOC == true
     }
 
     func openLocalVideo(
@@ -244,7 +250,15 @@ final class PlaybackStore: ObservableObject {
 
     func selectAudioTrack(id: Int64) {
         selectedAudioTrackID = id
+        reconcileSpatialAudioState()
         player.selectAudioTrack(id: id)
+    }
+
+    func setSpatialAudioEnabled(_ enabled: Bool) {
+        let nextValue = enabled && canEnableSpatialAudio
+        guard spatialAudioEnabled != nextValue else { return }
+        spatialAudioEnabled = nextValue
+        applySpatialAudioMode()
     }
 
     func selectSubtitleTrack(id: Int64?) {
@@ -301,6 +315,19 @@ final class PlaybackStore: ObservableObject {
         subtitleTracks = []
         selectedAudioTrackID = nil
         selectedSubtitleTrackID = nil
+        spatialAudioEnabled = false
+        applySpatialAudioMode()
+    }
+
+    private func reconcileSpatialAudioState() {
+        if spatialAudioEnabled && !canEnableSpatialAudio {
+            spatialAudioEnabled = false
+        }
+        applySpatialAudioMode()
+    }
+
+    private func applySpatialAudioMode() {
+        player.setSpatialAudioEnabled(spatialAudioEnabled && canEnableSpatialAudio)
     }
 
     private func beginAccessingScopedSubtitleURLs(_ urls: [URL]) {

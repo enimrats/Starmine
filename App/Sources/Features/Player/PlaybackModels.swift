@@ -11,9 +11,43 @@ struct MediaTrackOption: Identifiable, Hashable {
     let title: String
     let detail: String
     let isExternal: Bool
+    let codec: String?
+    let codecDescription: String?
+    let codecProfile: String?
 
     var id: String {
         "\(kind.rawValue)-\(mpvID)"
+    }
+
+    var isEAC3JOC: Bool {
+        Self.containsEAC3JOCMarker(codec)
+            || Self.containsEAC3JOCMarker(codecDescription)
+            || Self.containsEAC3JOCMarker(codecProfile)
+            || Self.containsEAC3JOCMarker(title)
+            || Self.containsEAC3JOCMarker(detail)
+    }
+
+    private static func containsEAC3JOCMarker(_ value: String?) -> Bool {
+        guard let value, !value.isEmpty else { return false }
+
+        let normalized = value.lowercased().filter { character in
+            character.isLetter || character.isNumber
+        }
+        guard !normalized.isEmpty else { return false }
+
+        if normalized.contains("eac3joc") || normalized.contains("ec3joc") {
+            return true
+        }
+
+        let isEAC3Family =
+            normalized.contains("eac3")
+            || normalized.contains("ec3")
+            || normalized.contains("ddp")
+            || normalized.contains("dolbydigitalplus")
+            || normalized.contains("digitalplus")
+
+        guard isEAC3Family else { return false }
+        return normalized.contains("joc") || normalized.contains("atmos")
     }
 }
 

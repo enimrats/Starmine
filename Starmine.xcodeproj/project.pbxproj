@@ -723,10 +723,10 @@
 /* Begin XCRemoteSwiftPackageReference section */
 		A53BAE94BC6D506593B4B182 /* XCRemoteSwiftPackageReference "MPVKit" */ = {
 			isa = XCRemoteSwiftPackageReference;
-			repositoryURL = "https://github.com/mpvkit/MPVKit.git";
+			repositoryURL = "https://github.com/yuygfgg/MPVKit.git";
 			requirement = {
 				kind = exactVersion;
-				version = 0.41.0;
+				version = "0.41.0-starmine.4";
 			};
 		};
 /* End XCRemoteSwiftPackageReference section */
