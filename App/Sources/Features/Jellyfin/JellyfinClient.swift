@@ -79,13 +79,14 @@ actor JellyfinClient: JellyfinClientProtocol {
 
     private static let accountsKey = "starmine.jellyfin.accounts"
     private static let activeAccountKey = "starmine.jellyfin.active-account"
+    private static let deviceIDKey = "starmine.jellyfin.device-id"
     private static let appVersion = "0.1"
     private static let clientName = "Starmine"
     private static let clientDevice = "Apple"
-    private static let clientDeviceID = "StarmineApple"
 
     private let session: URLSession
     private let defaults: UserDefaults
+    private let clientDeviceID: String
     private var accounts: [JellyfinAccountProfile] = []
     private var activeAccountID: UUID?
     private var isLoaded = false
@@ -97,6 +98,7 @@ actor JellyfinClient: JellyfinClientProtocol {
     ) {
         self.session = session
         self.defaults = defaults
+        clientDeviceID = Self.prepareDeviceID(defaults: defaults)
     }
 
     func snapshot() async -> JellyfinStoreSnapshot {
@@ -1283,11 +1285,30 @@ actor JellyfinClient: JellyfinClientProtocol {
         return URL(string: "\(baseURL)\(normalizedPath)")
     }
 
+    private static func prepareDeviceID(defaults: UserDefaults) -> String {
+        if let persistedDeviceID = defaults.string(forKey: Self.deviceIDKey)?
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+            !persistedDeviceID.isEmpty
+        {
+            return persistedDeviceID
+        }
+
+        // Older builds reused a single shared DeviceId, which caused different
+        // Starmine clients to overwrite each other's Jellyfin session. Drop the
+        // legacy login state once and issue a per-installation device identity.
+        defaults.removeObject(forKey: Self.accountsKey)
+        defaults.removeObject(forKey: Self.activeAccountKey)
+
+        let deviceID = "Starmine-\(UUID().uuidString.lowercased())"
+        defaults.set(deviceID, forKey: Self.deviceIDKey)
+        return deviceID
+    }
+
     private func authorizationHeader(token: String?) -> String {
         let base = [
             "MediaBrowser Client=\"\(Self.clientName)\"",
             "Device=\"\(Self.clientDevice)\"",
-            "DeviceId=\"\(Self.clientDeviceID)\"",
+            "DeviceId=\"\(clientDeviceID)\"",
             "Version=\"\(Self.appVersion)\"",
         ].joined(separator: ", ")
         guard let token, !token.isEmpty else {

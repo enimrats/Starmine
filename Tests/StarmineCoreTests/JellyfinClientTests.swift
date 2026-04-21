@@ -97,6 +97,138 @@ final class JellyfinClientTests: XCTestCase {
         super.tearDown()
     }
 
+    func testMigrationClearsLegacyAccountsWhenDeviceIDIsMissing()
+        async throws
+    {
+        let legacyAccount = JellyfinAccountProfile(
+            id: UUID(),
+            serverID: "server-1",
+            serverName: "Legacy Jellyfin",
+            username: "alice",
+            userID: "user-1",
+            accessToken: "token-1",
+            routes: [
+                JellyfinRoute(
+                    name: "Primary",
+                    url: "https://primary.example.com",
+                    priority: 0
+                )
+            ],
+            lastSuccessfulRouteID: nil,
+            lastConnectionAt: Date()
+        )
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .millisecondsSince1970
+        defaults.set(
+            try encoder.encode([legacyAccount]),
+            forKey: "starmine.jellyfin.accounts"
+        )
+        defaults.set(
+            legacyAccount.id.uuidString,
+            forKey: "starmine.jellyfin.active-account"
+        )
+        defaults.removeObject(forKey: "starmine.jellyfin.device-id")
+
+        let client = makeClient()
+        let snapshot = await client.snapshot()
+
+        XCTAssertTrue(snapshot.accounts.isEmpty)
+        XCTAssertNil(snapshot.activeAccountID)
+    }
+
+    func testDeviceIDIsPerInstallationAndStableAcrossClientInstances()
+        async throws
+    {
+        let sharedSuiteName = "JellyfinClientTests.shared.\(UUID().uuidString)"
+        let otherSuiteName = "JellyfinClientTests.other.\(UUID().uuidString)"
+        let sharedDefaults = try XCTUnwrap(
+            UserDefaults(suiteName: sharedSuiteName)
+        )
+        let otherDefaults = try XCTUnwrap(UserDefaults(suiteName: otherSuiteName))
+        sharedDefaults.removePersistentDomain(forName: sharedSuiteName)
+        otherDefaults.removePersistentDomain(forName: otherSuiteName)
+        defer {
+            sharedDefaults.removePersistentDomain(forName: sharedSuiteName)
+            otherDefaults.removePersistentDomain(forName: otherSuiteName)
+        }
+
+        let handler: @Sendable (URLRequest) throws -> (HTTPURLResponse, Data) = {
+            request in
+            guard let url = request.url else {
+                throw URLError(.badURL)
+            }
+
+            switch (url.host, url.path) {
+            case ("primary.example.com", "/System/Info/Public"):
+                return try Self.jsonResponse(
+                    url: url,
+                    body: [
+                        "Id": "server-1",
+                        "ServerName": "Test Jellyfin",
+                    ]
+                )
+
+            case ("primary.example.com", "/Users/AuthenticateByName"):
+                return try Self.jsonResponse(
+                    url: url,
+                    body: [
+                        "AccessToken": "token-1",
+                        "User": ["Id": "user-1"],
+                    ]
+                )
+
+            default:
+                throw URLError(.unsupportedURL)
+            }
+        }
+
+        await JellyfinURLProtocolState.shared.configure(handler: handler)
+
+        let firstClient = makeClient(defaults: sharedDefaults)
+        _ = try await firstClient.connect(
+            serverURL: "https://primary.example.com",
+            username: "alice",
+            password: "secret",
+            routeName: "Primary"
+        )
+        let firstObservedHeader = await latestAuthenticateAuthorizationHeader()
+        let firstHeader = try XCTUnwrap(firstObservedHeader)
+        let firstDeviceID = try XCTUnwrap(Self.deviceID(in: firstHeader))
+
+        await JellyfinURLProtocolState.shared.configure(handler: handler)
+
+        let secondClient = makeClient(defaults: sharedDefaults)
+        _ = try await secondClient.connect(
+            serverURL: "https://primary.example.com",
+            username: "alice",
+            password: "secret",
+            routeName: "Primary"
+        )
+        let secondObservedHeader = await latestAuthenticateAuthorizationHeader()
+        let secondHeader = try XCTUnwrap(secondObservedHeader)
+        let secondDeviceID = try XCTUnwrap(Self.deviceID(in: secondHeader))
+
+        await JellyfinURLProtocolState.shared.configure(handler: handler)
+
+        let thirdClient = makeClient(defaults: otherDefaults)
+        _ = try await thirdClient.connect(
+            serverURL: "https://primary.example.com",
+            username: "alice",
+            password: "secret",
+            routeName: "Primary"
+        )
+        let thirdObservedHeader = await latestAuthenticateAuthorizationHeader()
+        let thirdHeader = try XCTUnwrap(thirdObservedHeader)
+        let thirdDeviceID = try XCTUnwrap(Self.deviceID(in: thirdHeader))
+
+        XCTAssertEqual(firstDeviceID, secondDeviceID)
+        XCTAssertNotEqual(firstDeviceID, thirdDeviceID)
+        XCTAssertNotEqual(firstDeviceID, "StarmineApple")
+        XCTAssertTrue(firstDeviceID.hasPrefix("Starmine-"))
+
+        await JellyfinURLProtocolState.shared.reset()
+    }
+
     func testAutomaticRouteFallsBackToRealRequestWhenProbeTimesOut()
         async throws
     {
@@ -602,11 +734,18 @@ final class JellyfinClientTests: XCTestCase {
         XCTAssertEqual(reloadedAccount.activeRoute?.id, primaryRouteID)
     }
 
-    private func makeClient() -> JellyfinClient {
+    private func latestAuthenticateAuthorizationHeader() async -> String? {
+        let observedRequests = await JellyfinURLProtocolState.shared.requests()
+        return observedRequests.reversed().first(where: { request in
+            request.url?.path == "/Users/AuthenticateByName"
+        })?.value(forHTTPHeaderField: "X-Emby-Authorization")
+    }
+
+    private func makeClient(defaults: UserDefaults? = nil) -> JellyfinClient {
         let configuration = URLSessionConfiguration.ephemeral
         configuration.protocolClasses = [JellyfinURLProtocol.self]
         let session = URLSession(configuration: configuration)
-        return JellyfinClient(session: session, defaults: defaults)
+        return JellyfinClient(session: session, defaults: defaults ?? self.defaults)
     }
 
     private static func jsonResponse(
@@ -624,5 +763,18 @@ final class JellyfinClientTests: XCTestCase {
             )
         )
         return (response, data)
+    }
+
+    private static func deviceID(in authorizationHeader: String) -> String? {
+        let marker = "DeviceId=\""
+        guard let range = authorizationHeader.range(of: marker) else {
+            return nil
+        }
+        let valueStart = range.upperBound
+        guard let valueEnd = authorizationHeader[valueStart...].firstIndex(of: "\"")
+        else {
+            return nil
+        }
+        return String(authorizationHeader[valueStart..<valueEnd])
     }
 }
