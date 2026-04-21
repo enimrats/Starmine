@@ -51,6 +51,7 @@ final class MPVPlayerController: @unchecked Sendable {
     private var needsTrackRefresh = true
     private var desiredPlaybackRate = 1.0
     private var desiredSpatialAudioEnabled = false
+    private var desiredSpatialAudioDecoder: SpatialAudioDecoder?
     private var configuredAudioDecoder: String?
     private var configuredAudioOutput: String?
     private var defaultAudioDecoder: String?
@@ -156,9 +157,13 @@ final class MPVPlayerController: @unchecked Sendable {
         }
     }
 
-    func setSpatialAudioEnabled(_ enabled: Bool) {
+    func setSpatialAudioEnabled(
+        _ enabled: Bool,
+        decoder: SpatialAudioDecoder?
+    ) {
         queue.async {
             self.desiredSpatialAudioEnabled = enabled
+            self.desiredSpatialAudioDecoder = enabled ? decoder : nil
             guard self.initialized else { return }
             self.applyAudioConfigurationLocked(reloadCurrentTrack: true)
         }
@@ -647,14 +652,17 @@ final class MPVPlayerController: @unchecked Sendable {
         configuredAudioOutput = nil
         defaultAudioDecoder = nil
         defaultAudioOutput = nil
+        desiredSpatialAudioDecoder = nil
     }
 
     private func applyAudioConfigurationLocked(reloadCurrentTrack: Bool) {
+        let spatialAudioDecoder =
+            desiredSpatialAudioEnabled ? desiredSpatialAudioDecoder : nil
         let desiredAudioDecoder =
-            desiredSpatialAudioEnabled
-            ? "eac3joc" : (resolvedDefaultAudioDecoderLocked())
+            spatialAudioDecoder?.mpvDecoderName
+            ?? resolvedDefaultAudioDecoderLocked()
         let desiredAudioOutput =
-            desiredSpatialAudioEnabled
+            spatialAudioDecoder != nil
             ? "coreaudio_spatial714"
             : (resolvedDefaultAudioOutputLocked())
 

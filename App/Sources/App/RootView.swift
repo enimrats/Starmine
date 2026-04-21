@@ -1833,7 +1833,8 @@ struct RootView: View {
             Section("空间音频") {
                 trackMenuButton(
                     title: "空间音频",
-                    detail: "E-AC-3 JOC -> eac3joc + coreaudio_spatial714",
+                    detail: playback.selectedSpatialAudioDecoder?.menuDetail
+                        ?? "Atmos -> coreaudio_spatial714",
                     isSelected: playback.spatialAudioEnabled
                 ) {
                     notePlaybackInteraction()

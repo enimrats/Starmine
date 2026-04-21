@@ -5,6 +5,26 @@ enum MediaTrackKind: String, Hashable {
     case subtitle
 }
 
+enum SpatialAudioDecoder: String, Hashable {
+    case eac3joc
+    case truehdatmos
+
+    var mpvDecoderName: String { rawValue }
+
+    var sourceLabel: String {
+        switch self {
+        case .eac3joc:
+            return "E-AC-3 JOC"
+        case .truehdatmos:
+            return "TrueHD Atmos"
+        }
+    }
+
+    var menuDetail: String {
+        "\(sourceLabel) -> \(mpvDecoderName) + coreaudio_spatial714"
+    }
+}
+
 struct MediaTrackOption: Identifiable, Hashable {
     let kind: MediaTrackKind
     let mpvID: Int64
@@ -19,21 +39,40 @@ struct MediaTrackOption: Identifiable, Hashable {
         "\(kind.rawValue)-\(mpvID)"
     }
 
-    var isEAC3JOC: Bool {
-        Self.containsEAC3JOCMarker(codec)
-            || Self.containsEAC3JOCMarker(codecDescription)
-            || Self.containsEAC3JOCMarker(codecProfile)
-            || Self.containsEAC3JOCMarker(title)
-            || Self.containsEAC3JOCMarker(detail)
+    var spatialAudioDecoder: SpatialAudioDecoder? {
+        let candidates = [codec, codecDescription, codecProfile, title, detail]
+
+        if Self.containsEAC3JOCMarker(in: candidates) {
+            return .eac3joc
+        }
+
+        if Self.containsTrueHDAtmosMarker(in: candidates) {
+            return .truehdatmos
+        }
+
+        return nil
     }
 
-    private static func containsEAC3JOCMarker(_ value: String?) -> Bool {
-        guard let value, !value.isEmpty else { return false }
+    var supportsSpatialAudio: Bool {
+        spatialAudioDecoder != nil
+    }
+
+    private static func normalizedMarkerValue(_ value: String?) -> String? {
+        guard let value, !value.isEmpty else { return nil }
 
         let normalized = value.lowercased().filter { character in
             character.isLetter || character.isNumber
         }
-        guard !normalized.isEmpty else { return false }
+        return normalized.isEmpty ? nil : normalized
+    }
+
+    private static func combinedMarkerValue(_ values: [String?]) -> String? {
+        let combined = values.compactMap(normalizedMarkerValue).joined()
+        return combined.isEmpty ? nil : combined
+    }
+
+    private static func containsEAC3JOCMarker(in values: [String?]) -> Bool {
+        guard let normalized = combinedMarkerValue(values) else { return false }
 
         if normalized.contains("eac3joc") || normalized.contains("ec3joc") {
             return true
@@ -48,6 +87,24 @@ struct MediaTrackOption: Identifiable, Hashable {
 
         guard isEAC3Family else { return false }
         return normalized.contains("joc") || normalized.contains("atmos")
+    }
+
+    private static func containsTrueHDAtmosMarker(in values: [String?]) -> Bool {
+        guard let normalized = combinedMarkerValue(values) else { return false }
+
+        if normalized.contains("truehdatmos")
+            || normalized.contains("dolbytruehdatmos")
+        {
+            return true
+        }
+
+        let isTrueHDFamily =
+            normalized.contains("truehd")
+            || normalized.contains("dolbytruehd")
+            || normalized.contains("mlp")
+
+        guard isTrueHDFamily else { return false }
+        return normalized.contains("atmos")
     }
 }
 

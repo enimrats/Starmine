@@ -726,7 +726,7 @@
 			repositoryURL = "https://github.com/enimrats/MPVKit.git";
 			requirement = {
 				kind = exactVersion;
-				version = "0.41.0-starmine.4";
+				version = "0.41.0-starmine.5";
 			};
 		};
 /* End XCRemoteSwiftPackageReference section */

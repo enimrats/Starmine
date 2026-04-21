@@ -122,8 +122,12 @@ final class PlaybackStore: ObservableObject {
         subtitleTracks.first(where: { $0.mpvID == selectedSubtitleTrackID })
     }
 
+    var selectedSpatialAudioDecoder: SpatialAudioDecoder? {
+        selectedAudioTrack?.spatialAudioDecoder
+    }
+
     var canEnableSpatialAudio: Bool {
-        selectedAudioTrack?.isEAC3JOC == true
+        selectedSpatialAudioDecoder != nil
     }
 
     func openLocalVideo(
@@ -250,8 +254,8 @@ final class PlaybackStore: ObservableObject {
 
     func selectAudioTrack(id: Int64) {
         selectedAudioTrackID = id
-        reconcileSpatialAudioState()
         player.selectAudioTrack(id: id)
+        reconcileSpatialAudioState()
     }
 
     func setSpatialAudioEnabled(_ enabled: Bool) {
@@ -327,7 +331,14 @@ final class PlaybackStore: ObservableObject {
     }
 
     private func applySpatialAudioMode() {
-        player.setSpatialAudioEnabled(spatialAudioEnabled && canEnableSpatialAudio)
+        let decoder =
+            spatialAudioEnabled && canEnableSpatialAudio
+            ? selectedSpatialAudioDecoder
+            : nil
+        player.setSpatialAudioEnabled(
+            spatialAudioEnabled && canEnableSpatialAudio,
+            decoder: decoder
+        )
     }
 
     private func beginAccessingScopedSubtitleURLs(_ urls: [URL]) {

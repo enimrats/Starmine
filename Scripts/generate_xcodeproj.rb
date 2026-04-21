@@ -7,7 +7,7 @@ require 'pathname'
 ROOT = Pathname.new(__dir__).join('..').expand_path
 PROJECT_PATH = ROOT.join('Starmine.xcodeproj')
 MPVKIT_PACKAGE_URL = 'https://github.com/enimrats/MPVKit.git'
-MPVKIT_VERSION = '0.41.0-starmine.4'
+MPVKIT_VERSION = '0.41.0-starmine.5'
 SOURCE_ROOT = ROOT.join('App/Sources')
 RESOURCE_ROOT = ROOT.join('App/Resources')
 
